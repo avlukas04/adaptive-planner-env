@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     # Normal usage (tests / `python -m ...`) expects repo root on sys.path.
     from env.actions import Action, ActionType, generate_valid_actions
+    from env.episode_trace import EpisodeTrace
     from env.personas import Persona, get_personas
     from env.reward import compute_reward, detect_overlaps, travel_issues
     from env.scenario_generator import Scenario, get_scenario, list_scenario_ids, sample_scenarios
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
     repo_root = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(repo_root))
     from env.actions import Action, ActionType, generate_valid_actions
+    from env.episode_trace import EpisodeTrace
     from env.personas import Persona, get_personas
     from env.reward import compute_reward, detect_overlaps, travel_issues
     from env.scenario_generator import Scenario, get_scenario, list_scenario_ids, sample_scenarios
@@ -75,6 +77,7 @@ class LifeOpsState:
     last_added_event: Optional[Dict[str, Any]] = None
     last_handled_request: Optional[Dict[str, Any]] = None
     last_task_progress_minutes: int = 0
+    last_task_id_progressed: Optional[str] = None
 
     def current_request(self) -> Optional[Dict[str, Any]]:
         return self.pending_requests[0] if self.pending_requests else None
@@ -168,6 +171,7 @@ class LifeOpsEnv:
         self._state.last_added_event = None
         self._state.last_handled_request = None
         self._state.last_task_progress_minutes = 0
+        self._state.last_task_id_progressed = None
 
         at = str(action_dict.get("action_type"))
         if at in {ActionType.accept_event.value, ActionType.reject_event.value, ActionType.reschedule_event.value, ActionType.propose_new_time.value}:
@@ -195,7 +199,15 @@ class LifeOpsEnv:
         info: Dict[str, Any] = {
             "reward_breakdown": breakdown,
             "overlaps": detect_overlaps(next_obs.get("calendar", [])),
-            "travel_issues": travel_issues(next_obs.get("calendar", []), next_obs.get("travel_times", {})),
+            "travel_issues": travel_issues(
+                next_obs.get("calendar", []),
+                next_obs.get("travel_times", {}),
+                start_location=next_obs.get("persona", {}).get("home_location"),
+            ),
+            "last_added_event": copy.deepcopy(self._state.last_added_event),
+            "last_handled_request": copy.deepcopy(self._state.last_handled_request),
+            "last_task_progress_minutes": int(self._state.last_task_progress_minutes),
+            "last_task_id_progressed": self._state.last_task_id_progressed,
         }
         return next_obs, float(reward), bool(done), info
 
@@ -260,8 +272,10 @@ class LifeOpsEnv:
             progress = min(duration, int(t["remaining_minutes"]))
             t["remaining_minutes"] = int(t["remaining_minutes"]) - progress
             self._state.last_task_progress_minutes = int(progress)
+            self._state.last_task_id_progressed = str(t.get("task_id", "?"))
         else:
             self._state.last_task_progress_minutes = 0
+            self._state.last_task_id_progressed = None
 
     def _is_done(self) -> bool:
         if self._state.step_count >= self._state.max_steps:
@@ -273,26 +287,44 @@ class LifeOpsEnv:
         return True
 
 
+def _focus_overlaps_calendar(a: Action, calendar: List[Dict[str, Any]]) -> bool:
+    """True if adding this focus block would overlap with existing calendar events."""
+    start = int(a.new_start_min or 0)
+    dur = int(a.duration_min or 0)
+    sim = list(calendar) + [
+        {"event_id": "_", "start_min": start, "end_min": start + dur, "location": "x"},
+    ]
+    return len(detect_overlaps(sim)) > 0
+
+
 def _choose_simple_action(env: LifeOpsEnv) -> Action:
     """
     Tiny heuristic policy for manual running:
-    - If accept would cause overlap/travel issues, try reschedule actions next.
+    - If accept would cause overlap/travel issues, try reschedule/propose, or reject.
     - Otherwise accept the request.
-    - If no request, block focus time.
+    - If no request, block focus time (prefer non-overlapping slots).
     """
 
     valid = env.valid_actions()
     obs = env.observation()
     req = obs.get("current_request")
+    calendar = obs.get("calendar", [])
+    travel_times = obs.get("travel_times", {})
+    home = obs.get("persona", {}).get("home_location")
+
     if req is None:
         focus_actions = [a for a in valid if a.action_type == ActionType.block_focus_time]
         if not focus_actions:
             return valid[0]
 
+        # Prefer focus blocks that don't overlap with existing calendar.
+        non_overlapping = [a for a in focus_actions if not _focus_overlaps_calendar(a, calendar)]
+        candidates = non_overlapping if non_overlapping else focus_actions
+
         def focus_score(a: Action) -> Tuple[int, int]:
             start = int(a.new_start_min or 0)
             dur = int(a.duration_min or 0)
-            sim = list(obs.get("calendar", [])) + [
+            sim = list(calendar) + [
                 {
                     "event_id": "focus_sim",
                     "start_min": start,
@@ -300,43 +332,58 @@ def _choose_simple_action(env: LifeOpsEnv) -> Action:
                     "location": obs["persona"].get("primary_work_location", "Home"),
                 }
             ]
-            return (len(detect_overlaps(sim)), len(travel_issues(sim, obs.get("travel_times", {}))))
+            return (len(detect_overlaps(sim)), len(travel_issues(sim, travel_times, home)))
 
-        focus_actions.sort(key=focus_score)
-        return focus_actions[0]
+        candidates.sort(key=focus_score)
+        return candidates[0]
 
     # Pick the request-handling action that minimizes feasibility violations.
+    # Reject scores (0, 0) so we prefer it when all scheduling options cause issues.
     def score_action(a: Action) -> Tuple[int, int]:
         # (overlap_count, travel_issue_count) — smaller is better
         if a.action_type == ActionType.reject_event:
-            return (999, 999)  # prefer scheduling over rejecting (manual runner)
+            return (0, 0)  # no new overlaps/travel; prefer when scheduling options are bad
         if a.action_type in {ActionType.accept_event, ActionType.reschedule_event, ActionType.propose_new_time}:
             added = dict(req)
             if a.action_type in {ActionType.reschedule_event, ActionType.propose_new_time}:
                 added["start_min"] = int(a.new_start_min or added["start_min"])
                 added["end_min"] = int(a.new_end_min or added["end_min"])
-            # NOTE: propose_new_time does not actually schedule; don't add it to sim calendar.
-            sim_events = list(obs.get("calendar", [])) + ([] if a.action_type == ActionType.propose_new_time else [added])
-            return (len(detect_overlaps(sim_events)), len(travel_issues(sim_events, obs.get("travel_times", {}))))
+            sim_events = list(calendar) + (
+                [] if a.action_type == ActionType.propose_new_time else [added]
+            )
+            return (len(detect_overlaps(sim_events)), len(travel_issues(sim_events, travel_times, home)))
         return (500, 500)
 
-    candidates = [a for a in valid if a.action_type in {ActionType.accept_event, ActionType.reschedule_event, ActionType.propose_new_time, ActionType.reject_event}]
+    candidates = [
+        a
+        for a in valid
+        if a.action_type
+        in {ActionType.accept_event, ActionType.reschedule_event, ActionType.propose_new_time, ActionType.reject_event}
+    ]
     candidates.sort(key=score_action)
     return candidates[0] if candidates else valid[0]
 
 
 if __name__ == "__main__":
-    # Simple manual episode runner: `python env/lifeops_env.py`
+    # Simple manual episode runner with tracing: `python env/lifeops_env.py`
     env = LifeOpsEnv(seed=7)
     obs = env.reset()
-    print("Scenario:", obs["scenario_id"])
-    print("Persona:", obs["persona"]["name"])
+
+    trace = EpisodeTrace(
+        scenario_id=obs["scenario_id"],
+        persona_name=obs["persona"]["name"],
+        initial_calendar=copy.deepcopy(obs.get("calendar", [])),
+        initial_tasks=copy.deepcopy(obs.get("tasks", [])),
+        initial_pending_count=obs.get("pending_request_count", 0),
+    )
 
     done = False
     total_reward = 0.0
+    step_num = 0
+
     while not done:
-        obs = env.observation()
-        req = obs.get("current_request")
+        prev_obs = env.observation()
+        req = prev_obs.get("current_request")
         if req is not None:
             print(f"\nCurrent request: {req['title']} ({req['start_min']}..{req['end_min']}) @ {req['location']}")
         else:
@@ -344,13 +391,30 @@ if __name__ == "__main__":
 
         action = _choose_simple_action(env)
         next_obs, reward, done, info = env.step(action)
+        step_num += 1
         total_reward += reward
-        print("Action:", action.to_dict())
-        print("Reward:", reward)
-        if info.get("overlaps"):
-            print("Overlaps:", info["overlaps"])
-        if info.get("travel_issues"):
-            print("Travel issues:", info["travel_issues"])
 
-    print("\nEpisode done. Total reward:", total_reward)
+        trace.log_step(
+            step=step_num,
+            action=action.to_dict(),
+            prev_obs=prev_obs,
+            next_obs=next_obs,
+            reward=reward,
+            breakdown=info.get("reward_breakdown", {}),
+            info=info,
+            done=done,
+            last_added_event=info.get("last_added_event"),
+            last_handled_request=info.get("last_handled_request"),
+            last_task_progress_minutes=info.get("last_task_progress_minutes", 0),
+            task_id_progressed=info.get("last_task_id_progressed"),
+        )
+
+        print(f"  → Action: {trace._format_action(action.to_dict())}  |  Reward: {reward:+.2f}")
+        if info.get("overlaps"):
+            print(f"  ⚠ Overlaps: {info['overlaps']}")
+        if info.get("travel_issues"):
+            print(f"  ⚠ Travel issues: {info['travel_issues']}")
+
+    trace.total_reward = total_reward
+    trace.print_full(final_calendar=next_obs.get("calendar", []))
 
