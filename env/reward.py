@@ -10,7 +10,7 @@ The reward is intentionally small and readable. It's "shaped" to encourage:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 def _overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
@@ -46,9 +46,13 @@ def _travel_time_minutes(travel_times: Dict[str, Dict[str, int]], a_loc: str, b_
 def travel_issues(
     events: List[Dict[str, Any]],
     travel_times: Dict[str, Dict[str, int]],
+    start_location: Optional[str] = None,
 ) -> List[Tuple[str, str, int, int]]:
     """
     Returns travel feasibility issues between consecutive events.
+
+    If start_location is provided (e.g. persona home), also checks whether the
+    user can reach the first event of the day in time.
 
     Output tuple: (from_event_id, to_event_id, needed_minutes, available_minutes)
     """
@@ -58,6 +62,15 @@ def travel_issues(
 
     ordered = sorted(events, key=lambda e: (int(e["start_min"]), int(e["end_min"])))
     issues: List[Tuple[str, str, int, int]] = []
+
+    # Check travel from start_location to first event (if provided).
+    if start_location is not None:
+        first = ordered[0]
+        available = int(first["start_min"])
+        needed = _travel_time_minutes(travel_times, start_location, str(first["location"]))
+        if needed > available:
+            issues.append(("__start__", str(first["event_id"]), needed, available))
+
     for prev, nxt in zip(ordered, ordered[1:]):
         prev_end = int(prev["end_min"])
         nxt_start = int(nxt["start_min"])
@@ -96,11 +109,12 @@ def compute_reward(
     if next_overlaps:
         reward -= 5.0 * len(next_overlaps)
         breakdown["overlap_penalty"] = -5.0 * len(next_overlaps)
-    if prev_overlaps and len(next_overlaps) < len(prev_overlaps):
-        reward += 3.0
-        breakdown["conflict_resolved_bonus"] = 3.0
 
-    issues = travel_issues(next_events, travel_times)
+    issues = travel_issues(
+        next_events,
+        travel_times,
+        start_location=persona.get("home_location"),
+    )
     if issues:
         # Penalize per infeasible leg.
         travel_pen = -4.0 * len(issues) * float(persona.get("travel_aversion_weight", 1.0))
