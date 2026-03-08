@@ -1,11 +1,16 @@
 """
 FastAPI app for LifeOps OpenEnv server.
 """
+import sys
+print("[LifeOps] Loading app...", flush=True)
+sys.stdout.flush()
 
 from openenv.core.env_server.http_server import create_app
+print("[LifeOps] create_app imported", flush=True)
 
 from ..models import LifeOpsAction, LifeOpsObservation
 from .lifeops_environment import LifeOpsEnvironment
+print("[LifeOps] Models and env imported", flush=True)
 
 app = create_app(
     LifeOpsEnvironment,
@@ -13,6 +18,7 @@ app = create_app(
     LifeOpsObservation,
     env_name="lifeops_env",
 )
+print("[LifeOps] App created, ready for uvicorn", flush=True)
 
 
 def main():
