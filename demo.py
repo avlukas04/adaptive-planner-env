@@ -400,9 +400,108 @@ def _preferences_bullets(agent: LLMAgent, day: str) -> List[str]:
         return ", ".join(f"{_min_to_hhmm(b)} (score {s:+.1f}, {seen}x)" for b, s, seen in items)
 
     lines: List[str] = []
-    lines.append(f"Prefer: {fmt(top)}" if top else "Prefer: (none yet)")
-    lines.append(f"Avoid: {fmt(bottom)}" if bottom else "Avoid: (none yet)")
+    # UI copy: judges ask "what did it learn?" — keep it crisp and directional.
+    lines.append(f"Prefers meetings at: {fmt(top)}" if top else "Prefers meetings at: (none yet)")
+    lines.append(f"Avoids meetings at: {fmt(bottom)}" if bottom else "Avoids meetings at: (none yet)")
     return lines
+
+
+def _agent_change_card_html(
+    before_obs: Dict[str, Any],
+    key_step: Optional[Dict[str, Any]],
+) -> str:
+    if not key_step:
+        return "<div style='color:#64748b;font-size:13px'>Run the agent to see the exact change it makes.</div>"
+
+    obs = key_step.get("obs") or {}
+    action = key_step.get("action") or {}
+    info = key_step.get("info") or {}
+    rb = info.get("reward_breakdown") or {}
+    req = obs.get("current_request") or {}
+
+    at = str(action.get("action_type", ""))
+    step_reward = float(key_step.get("reward", 0.0))
+
+    title = str(req.get("title", "Request"))
+    old_start = int(req.get("start_min", 0))
+    old_end = int(req.get("end_min", 0))
+
+    new_start = action.get("new_start_min")
+    new_end = action.get("new_end_min")
+
+    old_time = f"{_min_to_hhmm(old_start)}–{_min_to_hhmm(old_end)}"
+    new_time = ""
+    if new_start is not None and new_end is not None:
+        new_time = f"{_min_to_hhmm(int(new_start))}–{_min_to_hhmm(int(new_end))}"
+
+    def _overlap(a_s: int, a_e: int, b_s: int, b_e: int) -> bool:
+        return a_s < b_e and b_s < a_e
+
+    cal = list(obs.get("calendar", []))
+    overlaps_focus = any(
+        str(e.get("kind", "")) == "focus"
+        and _overlap(old_start, old_end, int(e.get("start_min", 0)), int(e.get("end_min", 0)))
+        for e in cal
+    )
+
+    # Build a human-readable reason that maps to reward shaping.
+    reasons: List[str] = []
+    if overlaps_focus:
+        reasons.append("Protect focus block")
+    if rb.get("overlap_penalty") or rb.get("travel_infeasible_penalty"):
+        reasons.append("Avoid conflict / infeasible travel")
+    if rb.get("deadline_pressure_penalty"):
+        reasons.append("Protect urgent goal deadline")
+    if rb.get("task_progress_reward"):
+        reasons.append("Protect focus block (higher productivity value)")
+    if not reasons:
+        reasons.append("Match schedule constraints + learned habits")
+
+    action_label = at.replace("_", " ").title() if at else "Decision"
+
+    # Change view (explicit, judge-friendly).
+    if at in {"reschedule_event", "propose_new_time"} and new_time:
+        change_lines = f"""
+<div style="font-weight:950;color:#0f172a;font-size:13px;margin-bottom:6px">Change Made By Agent</div>
+<div style="font-size:14px;font-weight:900;color:#0f172a">{old_time} {title}</div>
+<div style="color:#64748b;font-weight:900;margin:2px 0">↓</div>
+<div style="font-size:14px;font-weight:900;color:#0f172a">{new_time} {title}</div>
+"""
+    elif at == "reject_event":
+        change_lines = f"""
+<div style="font-weight:950;color:#0f172a;font-size:13px;margin-bottom:6px">Change Made By Agent</div>
+<div style="font-size:14px;font-weight:900;color:#0f172a">{old_time} {title}</div>
+<div style="color:#64748b;font-weight:900;margin:2px 0">↓</div>
+<div style="font-size:14px;font-weight:900;color:#991b1b">Rejected</div>
+"""
+    elif at == "accept_event":
+        change_lines = f"""
+<div style="font-weight:950;color:#0f172a;font-size:13px;margin-bottom:6px">Change Made By Agent</div>
+<div style="font-size:14px;font-weight:900;color:#0f172a">{old_time} {title}</div>
+<div style="color:#64748b;font-weight:900;margin:2px 0">↓</div>
+<div style="font-size:14px;font-weight:900;color:#166534">Accepted</div>
+"""
+    else:
+        change_lines = f"""
+<div style="font-weight:950;color:#0f172a;font-size:13px;margin-bottom:6px">Change Made By Agent</div>
+<div style="font-size:14px;font-weight:900;color:#0f172a">{action_label}</div>
+"""
+
+    reason_html = f"<div style='margin-top:10px;font-size:13px;color:#0f172a'><b>Reason:</b> {reasons[0]}</div>"
+    reward_html = f"<div style='margin-top:6px;font-size:13px;color:#0f172a'><b>Reward:</b> {step_reward:+.1f}</div>"
+
+    return f"""
+<div style="
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 14px 14px 12px 14px;
+  background: linear-gradient(180deg, rgba(34,197,94,0.10), rgba(255,255,255,1));
+">
+  {change_lines}
+  {reason_html}
+  {reward_html}
+</div>
+"""
 
 
 def _episode_summary_line(before_obs: Dict[str, Any], after_obs: Dict[str, Any]) -> str:
@@ -763,9 +862,9 @@ def main() -> None:
     with header:
         c0, c1, c2, c3, c4 = st.columns([1.3, 1.2, 1.8, 0.9, 1.0])
         with c0:
-            st.markdown("<div style='font-size:22px;font-weight:900'>LifeOps — AI Scheduling Agent</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size:22px;font-weight:950'>LifeOps</div>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='margin-top:-2px;font-size:12px;color:#64748b'>Calendar conflict resolution + preference learning</div>",
+                "<div style='margin-top:-2px;font-size:12px;color:#64748b'>AI Agent that Learns Your Scheduling Habits</div>",
                 unsafe_allow_html=True,
             )
         with c1:
@@ -776,7 +875,7 @@ def main() -> None:
                 "medium_1": "Busy Day (5 events)",
                 "edge_cascade_1": "Conflict Day (cascading conflicts)",
                 "edge_mood_monday_1": "Monday Blues (mood patterns)",
-                "edge_deadline_1": "Crunch Week (goal deadline pressure)",
+                "edge_deadline_1": "Messy Day (focus vs meetings)",
             }
             scenario_ids = list_scenario_ids()
             scenario = st.selectbox(
@@ -809,17 +908,38 @@ def main() -> None:
         st.session_state.episode_reward = 0.0
         st.session_state.active_scenario = scenario
 
-    # Run with a tiny narrative animation.
+    # Run with a small narrative animation (adds demo "magic").
     if run_click:
         env.reset(scenario_id=scenario)
+
+        # Ensure the decision moment lands before we render the updated schedule.
+        # We'll compute first, then intentionally pause, then commit results to session_state.
         with st.status("Incoming request received…", expanded=True) as status:
-            st.write("Checking calendar conflicts…")
-            time.sleep(0.15)
-            st.write("Estimating user preferences…")
-            time.sleep(0.15)
-            st.write("Selecting best action…")
+            obs0 = env.observation()
+            req0 = obs0.get("current_request") or {}
+            if req0:
+                st.write(f"Request: {str(req0.get('title','Request'))} at {_min_to_hhmm(int(req0.get('start_min',0)))}")
+            time.sleep(0.25)
+            st.write("Agent analyzing preferences…")
+            time.sleep(0.25)
+            st.write("• Checking conflicts")
+            time.sleep(0.20)
+            st.write("• Checking user habits")
+            time.sleep(0.20)
+            st.write("• Evaluating reward")
+            time.sleep(0.25)
+
             trace, total, traj, before_obs, after_obs = run_one_episode(env, agent_kind=agent_kind, llm_agent=llm_agent)
+
+            key = None
+            if traj:
+                key = traj[0]
+            if key:
+                a = (key.get("action") or {}).get("action_type", "")
+                status.update(label=f"Decision: {str(a).replace('_',' ').upper()}", state="running")
+                time.sleep(0.65)
             status.update(label="Decision made. Schedule updated.", state="complete")
+
         st.session_state.trace = trace
         st.session_state.trajectory = traj
         st.session_state.before_obs = before_obs
@@ -929,7 +1049,7 @@ def main() -> None:
                 bullets.append(f"🧠 Preference: user rejects similar requests ~{cancel_pct}% of the time (n={seen})")
             st.markdown("\n".join(f"- {b}" for b in bullets))
 
-            st.markdown("**Agent must choose**")
+            st.markdown("**Agent Options**")
             st.markdown(
                 """
 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
@@ -941,6 +1061,10 @@ def main() -> None:
 """,
                 unsafe_allow_html=True,
             )
+            if traj:
+                chosen = str(((traj[0].get("action") or {}).get("action_type", "")) or "").replace("_", " ").upper()
+                if chosen:
+                    st.markdown(f"**Chosen:** {chosen}")
 
     # -------------------------------------------------
     # Step 3 — Agent Decision (hero)
@@ -973,25 +1097,43 @@ def main() -> None:
             )
             st.markdown(f"**Request:** {req_start} {req_title}")
 
-            reasons: List[str] = []
-            if rb.get("overlap_penalty") or rb.get("travel_infeasible_penalty"):
-                reasons.append("Avoid conflict / infeasible travel")
-            if at == "block_focus_time" or rb.get("task_progress_reward") or rb.get("deadline_pressure_penalty"):
-                reasons.append("Protect focus time to improve goal completion")
-
+            detected: List[str] = []
             cancel_pct, seen = _cancel_pct_for_request(obs)
-            if cancel_pct is not None and cancel_pct >= 50 and seen >= 2:
-                reasons.append(f"User often rejects meetings at this time (~{cancel_pct}%, n={seen})")
+            if cancel_pct is not None and seen >= 2:
+                detected.append(f"User rejects similar requests at this time (~{cancel_pct}%, n={seen})")
+            if rb.get("overlap_penalty") or rb.get("travel_infeasible_penalty"):
+                detected.append("Request would create a conflict / infeasible travel")
+            # Make "protect focus" explicit even if reward breakdown fields shift.
+            cal = list(obs.get("calendar", []))
+            rs = int(req.get("start_min", 0))
+            re_ = int(req.get("end_min", 0))
+            overlaps_focus = any(
+                str(e.get("kind", "")) == "focus" and _overlap(rs, re_, int(e.get("start_min", 0)), int(e.get("end_min", 0)))
+                for e in cal
+            )
+            if overlaps_focus:
+                detected.append("Overlaps a focus block (higher productivity value)")
+
+            if rb.get("task_progress_reward"):
+                detected.append("Focus time contributes directly to goal progress")
+
+            due_soon = any(int(t.get("due_in_days", 999)) <= 0 for t in list(obs.get("tasks", [])))
+            if rb.get("deadline_pressure_penalty") or due_soon:
+                detected.append("Deadline pressure is high (goal due today/soon)")
+            if not detected:
+                detected.append("No strong pattern yet (limited preference data)")
+
+            decision_line = at.replace("_", " ").title() if at else "Decision"
+            st.markdown("**Agent Reasoning**")
+            st.markdown("**Detected patterns:**")
+            st.markdown("\n".join(f"- {d}" for d in detected[:4]))
+            st.markdown("**Decision:**")
+            st.markdown(f"- {decision_line}")
 
             new_start = action.get("new_start_min")
             if at in {"reschedule_event", "propose_new_time"} and new_start is not None:
-                reasons.append(f"Proposed new time: {_min_to_hhmm(int(new_start))}")
-
-            if not reasons:
-                reasons.append("Best fit for schedule constraints + learned habits")
-
-            st.markdown("**Reasoning**")
-            st.markdown("\n".join(f"- {r}" for r in reasons[:3]))
+                st.markdown(f"**New time:** {_min_to_hhmm(int(new_start))}")
+            st.markdown(f"**Reward:** {step_reward:+.1f}")
 
             st.markdown("**Reward impact**")
             st.markdown(
@@ -1010,7 +1152,7 @@ def main() -> None:
     step4 = st.container(border=True)
     with step4:
         st.subheader("Step 4 — Updated Schedule (After)")
-        st.caption("Did the schedule get better? Compare before vs after.")
+        st.caption("Before → Agent Change → After. Judges should be able to see exactly what changed at a glance.")
 
         if not after_obs:
             st.info("Run the agent to see the improved schedule.")
@@ -1042,83 +1184,16 @@ def main() -> None:
             after_html = render_timeline_html(after_obs, after_calendar, issue_levels=after_levels, moved_event_ids=moved_ids)
 
             key_step = _pick_key_step(traj)
-            arrow = "Schedule improved →"
-            if key_step:
-                a = (key_step.get("action") or {}).get("action_type", "")
-                arrow = str(a).replace("_", " ").title() + " →"
-
-            st.markdown(
-                f"""
-<style>
-  .ba4 {{
-    position: relative;
-    display: flex;
-    gap: 0;
-    width: 100%;
-    margin-top: 6px;
-  }}
-  .ba4-col {{
-    width: 50%;
-    overflow: hidden;
-    padding-right: 10px;
-    box-sizing: border-box;
-    min-width: 0;
-  }}
-  .ba4-col.right {{
-    padding-left: 10px;
-    padding-right: 0;
-  }}
-  .ba4-divider {{
-    position: absolute;
-    left: 50%;
-    top: 0;
-    bottom: 0;
-    width: 0;
-    pointer-events: none;
-  }}
-  .ba4-divider:before {{
-    content: "";
-    position: absolute;
-    left: -0.5px;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: #e5e7eb;
-  }}
-  .ba4-arrow {{
-    position: absolute;
-    left: -18px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 999px;
-    padding: 6px 10px;
-    color: #64748b;
-    font-weight: 900;
-    font-size: 12px;
-  }}
-  .ba4-head {{
-    font-weight: 900;
-    margin-bottom: 6px;
-  }}
-</style>
-<div class="ba4">
-  <div class="ba4-col left">
-    <div class="ba4-head" style="color:#64748b">Before</div>
-    {before_html}
-  </div>
-  <div class="ba4-col right">
-    <div class="ba4-head" style="color:#16a34a">After</div>
-    {after_html}
-  </div>
-  <div class="ba4-divider">
-    <div class="ba4-arrow">{arrow}</div>
-  </div>
-</div>
-""",
-                unsafe_allow_html=True,
-            )
+            cols = st.columns([1.1, 0.9, 1.1], gap="large")
+            with cols[0]:
+                st.markdown("<div style='font-weight:950;color:#64748b;margin-bottom:6px'>Before</div>", unsafe_allow_html=True)
+                st.markdown(before_html, unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown("<div style='font-weight:950;color:#0f172a;margin-bottom:6px'>Agent Change</div>", unsafe_allow_html=True)
+                st.markdown(_agent_change_card_html(before_obs, key_step), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown("<div style='font-weight:950;color:#16a34a;margin-bottom:6px'>After</div>", unsafe_allow_html=True)
+                st.markdown(after_html, unsafe_allow_html=True)
 
             st.caption(_episode_summary_line(before_obs, after_obs))
 
@@ -1129,8 +1204,8 @@ def main() -> None:
     # -------------------------------------------------
     insights = st.container(border=True)
     with insights:
-        st.subheader("Learning Insights")
-        st.caption("Preference learning + a short decision log (kept separate from the core demo narrative).")
+        st.subheader("Learned User Preferences")
+        st.caption("What the AI learned + a short decision log (kept separate from the core demo narrative).")
 
         cA, cB = st.columns([1.1, 0.9], gap="large")
         with cA:
@@ -1179,15 +1254,16 @@ def main() -> None:
 
     graph_card = st.container(border=True)
     with graph_card:
-        st.subheader("Agent Learning (Reward Graph)")
-        img_path = Path("training") / "reward_comparison.png"
-        if img_path.exists():
-            st.image(str(img_path), caption="Episodes vs reward (moving averages)", use_container_width=True)
-        else:
-            st.info(
-                "No reward comparison plot found at `training/reward_comparison.png`. "
-                "Generate it by running `python training/evaluate_agents.py -n 100`."
-            )
+        st.subheader("Learning Evidence (Reward Graph)")
+        with st.expander("Show reward graph", expanded=False):
+            img_path = Path("training") / "reward_comparison.png"
+            if img_path.exists():
+                st.image(str(img_path), caption="Episodes vs reward (moving averages)", use_container_width=True)
+            else:
+                st.info(
+                    "No reward comparison plot found at `training/reward_comparison.png`. "
+                    "Generate it by running `python training/evaluate_agents.py -n 100`."
+                )
 
 
 if __name__ == "__main__":

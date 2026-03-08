@@ -319,7 +319,12 @@ def sample_scenarios() -> List[Scenario]:
             persona_id="busy_parent",
             calendar=[
                 Event("e1", "School drop-off", h2m(8, 30), h2m(9, 0), "School", importance=3, kind="obligation"),
+                # Intentionally "messy": stacked focus blocks + little slack. This makes the incoming
+                # request conflict obvious in the demo UI.
                 Event("e2", "Work block", h2m(9, 30), h2m(11, 0), "Office", importance=2, kind="focus"),
+                Event("e4", "Pitch deck focus block", h2m(11, 0), h2m(12, 0), "Office", importance=3, kind="focus"),
+                Event("e5", "Email triage", h2m(12, 30), h2m(13, 0), "Office", importance=1, kind="personal"),
+                Event("e6", "Prep notes", h2m(13, 30), h2m(14, 0), "Office", importance=2, kind="focus"),
                 Event("e3", "School pickup", h2m(15, 30), h2m(16, 0), "School", importance=3, kind="obligation"),
             ],
             tasks=[
