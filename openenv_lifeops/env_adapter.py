@@ -62,3 +62,6 @@ class LifeOpsEnvAdapter:
 
     def close(self):
         self._client.close()
+
+    def observation(self) -> Dict[str, Any]:
+        return self._last_obs or {}
