@@ -5,7 +5,7 @@ import sys
 print("[LifeOps] Loading app...", flush=True)
 sys.stdout.flush()
 
-from openenv.core.env_server.http_server import create_app
+from openenv_core.env_server.http_server import create_app
 print("[LifeOps] create_app imported", flush=True)
 
 from ..models import LifeOpsAction, LifeOpsObservation
