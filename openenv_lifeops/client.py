@@ -4,9 +4,9 @@ LifeOps OpenEnv client - connects to LifeOps environment on HF Spaces.
 
 from typing import Any, Dict
 
-from openenv.core.client_types import StepResult
-from openenv.core.env_client import EnvClient
-from openenv.core.env_server.types import State
+from openenv_core.client_types import StepResult
+from openenv_core.env_client import EnvClient
+from openenv_core.env_server.types import State
 
 from .models import LifeOpsAction, LifeOpsObservation
 
