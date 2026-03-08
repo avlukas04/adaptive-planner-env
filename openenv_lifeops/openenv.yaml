@@ -1,0 +1,6 @@
+spec_version: 1
+name: lifeops_env
+type: space
+runtime: docker
+app: openenv_lifeops.server.app:app
+port: 8000

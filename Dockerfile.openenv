@@ -1,0 +1,23 @@
+# Dockerfile for LifeOps OpenEnv environment (HF Spaces)
+# Build context: repo root. Deploy to a separate Space (e.g. openenv-community/lifeops-env)
+
+ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+# Copy env and openenv_lifeops
+COPY env /app/env
+COPY openenv_lifeops /app/openenv_lifeops
+
+ENV PYTHONPATH="/app:$PYTHONPATH"
+
+# Install openenv-core and deps
+RUN pip install --no-cache-dir openenv-core==0.2.1 fastapi uvicorn
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+CMD ["uvicorn", "openenv_lifeops.server.app:app", "--host", "0.0.0.0", "--port", "8000"]
