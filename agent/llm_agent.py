@@ -75,18 +75,6 @@ Incoming request: Client review
 Reasoning: High-importance meeting during preferred hours with an empty calendar; accept.
 CHOICE: 1
 
-Example 3:
-Persona: Busy Parent
-Preferred meeting window: [540, 960]
-Current calendar:
-  - 09:00–10:00: Meeting A @ Office
-  - 14:00–15:00: Meeting B @ Home
-No pending request. You can block focus time for tasks.
-Tasks:
-  - Write report: 60 min remaining (priority 2)
-Reasoning: No pending request; block focus time at a free slot (11:00) between the two existing events.
-CHOICE: 9
-
 """
 
 logger = logging.getLogger(__name__)
@@ -161,11 +149,11 @@ def _state_to_prompt(
         elif a.action_type == ActionType.reschedule_event:
             ns = int(a.new_start_min or 0)
             ne = int(a.new_end_min or 0)
-            lines.append(f"  {i}. reschedule_event → {_min_to_time(ns)}–{_min_to_time(ne)}")
+            lines.append(f"  {i}. reschedule_event → {_min_to_time(ns)}–{_min_to_time(ne)} [commits the change to your calendar]")
         elif a.action_type == ActionType.propose_new_time:
             ns = int(a.new_start_min or 0)
             ne = int(a.new_end_min or 0)
-            lines.append(f"  {i}. propose_new_time → {_min_to_time(ns)}–{_min_to_time(ne)}")
+            lines.append(f"  {i}. propose_new_time → {_min_to_time(ns)}–{_min_to_time(ne)} [suggests to requester only, does not commit]")
         else:
             lines.append(f"  {i}. {a.action_type.value}")
 
@@ -310,7 +298,7 @@ def _generate_response(
 def _generate_response_groq(
     groq_model_id: str,
     prompt: str,
-    max_new_tokens: int = 20,
+    max_new_tokens: int = 150,
     temperature: float = 0.0,
 ) -> str:
     """Call Groq API for inference. Requires GROQ_API_KEY in env and pip install groq."""
@@ -337,7 +325,7 @@ def _generate_response_groq(
     completion = client.chat.completions.create(
         model=groq_model_id,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_new_tokens,
+        max_tokens=200,
         temperature=temperature,
     )
     content = completion.choices[0].message.content

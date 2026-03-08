@@ -107,8 +107,8 @@ def compute_reward(
     prev_overlaps = detect_overlaps(prev_events)
     next_overlaps = detect_overlaps(next_events)
     if next_overlaps:
-        reward -= 5.0 * len(next_overlaps)
-        breakdown["overlap_penalty"] = -5.0 * len(next_overlaps)
+        reward -= 3.0 * len(next_overlaps)  # scaled up to balance against overlap penalties and encourage goal progress
+        breakdown["overlap_penalty"] = -3.0 * len(next_overlaps)  # scaled up to balance against overlap penalties and encourage goal progress
 
     issues = travel_issues(
         next_events,
@@ -145,7 +145,7 @@ def compute_reward(
     if action.get("action_type") == "block_focus_time":
         progress = int(next_state.get("last_task_progress_minutes", 0))
         if progress > 0:
-            focus_rew = (1.0 + 0.02 * progress) * float(persona.get("focus_time_weight", 1.0))
+            focus_rew = (2.0 + 0.02 * progress) * float(persona.get("focus_time_weight", 1.0))  # scaled up to balance against overlap penalties and encourage goal progress
             reward += focus_rew
             breakdown["focus_reward"] = focus_rew
         else:

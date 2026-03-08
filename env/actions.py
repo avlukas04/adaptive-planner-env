@@ -100,19 +100,30 @@ def generate_valid_actions(state: Dict[str, Any]) -> List[Action]:
             )
 
     # Focus blocks: propose a couple of common durations at common times.
+    # Filter out any that would overlap with existing calendar events (same check as
+    # reward.py: a_start < b_end and b_start < a_end) to avoid suggesting invalid
+    # actions that would be penalized.
     tasks = state.get("tasks", [])
     has_unfinished = any(int(t.get("remaining_minutes", 0)) > 0 for t in tasks)
+    calendar = state.get("calendar", [])
     if has_unfinished:
-        for start_min in (9 * 60, 11 * 60, 14 * 60, 16 * 60):
-            for duration in (30, 60):
-                actions.append(
-                    Action(
-                        ActionType.block_focus_time,
-                        request_id=None,
-                        new_start_min=start_min,
-                        duration_min=duration,
-                    )
+        for start_min in (9 * 60, 11 * 60, 13 * 60, 15 * 60, 17 * 60):
+            for duration in (60,):
+                focus_start = start_min
+                focus_end = start_min + duration
+                overlaps = any(
+                    focus_start < int(e.get("end_min", 0)) and int(e.get("start_min", 0)) < focus_end
+                    for e in calendar
                 )
+                if not overlaps:
+                    actions.append(
+                        Action(
+                            ActionType.block_focus_time,
+                            request_id=None,
+                            new_start_min=start_min,
+                            duration_min=duration,
+                        )
+                    )
 
     return actions
 

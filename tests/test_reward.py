@@ -29,3 +29,47 @@ class TestRewardHelpers(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+
+class TestNewRewardTerms:
+    def test_important_accept_bonus(self):
+        from env.reward import compute_reward
+        from env.actions import ActionType
+
+        prev_state = {
+            "calendar": [],
+            "persona": {"travel_aversion_weight": 1.0, "home_location": "Office"},
+            "travel_times": {},
+        }
+        next_state = {
+            "calendar": [{"start_min": 600, "end_min": 660, "location": "Office", "title": "Big Meeting"}],
+            "persona": {"travel_aversion_weight": 1.0, "home_location": "Office"},
+            "travel_times": {},
+            "last_handled_request": {"importance": 3, "title": "Big Meeting"},
+        }
+        action = {"action_type": "accept_event", "request_id": "r1"}
+
+        reward, breakdown = compute_reward(prev_state, action, next_state)
+        assert "important_accept_bonus" in breakdown, f"Got: {breakdown}"
+        assert breakdown["important_accept_bonus"] == 2.0
+
+    def test_clean_schedule_bonus(self):
+        from env.reward import compute_reward
+
+        prev_state = {
+            "calendar": [],
+            "persona": {"travel_aversion_weight": 1.0, "home_location": "Office"},
+            "travel_times": {},
+        }
+        next_state = {
+            "calendar": [{"start_min": 600, "end_min": 660, "location": "Office", "title": "Lunch"}],
+            "persona": {"travel_aversion_weight": 1.0, "home_location": "Office"},
+            "travel_times": {},
+            "last_handled_request": {"importance": 1, "title": "Lunch"},
+        }
+        action = {"action_type": "accept_event", "request_id": "r1"}
+
+        reward, breakdown = compute_reward(prev_state, action, next_state)
+        assert "clean_schedule_bonus" in breakdown, f"Got: {breakdown}"
+        assert breakdown["clean_schedule_bonus"] == 1.0

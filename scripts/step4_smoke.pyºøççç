@@ -1,0 +1,14 @@
+from env.lifeops_env import LifeOpsEnv
+env = LifeOpsEnv()
+for sid in ['scenario_1', 'scenario_2', 'scenario_3']:
+    obs = env.reset(sid)
+    done, total, steps = False, 0, 0
+    while not done:
+        actions = env.valid_actions()
+        obs, reward, done, info = env.step(actions[0])
+        total += reward
+        steps += 1
+    print(f'{sid}: steps={steps} reward={total:.2f}')
+print('OK')
+
+
