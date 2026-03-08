@@ -1,18 +1,17 @@
 # LifeOps OpenEnv environment for HF Spaces
-# HF Spaces uses port 7860 by default
-ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
-FROM ${BASE_IMAGE}
+# Use python base (avoids openenv-base which can hit HF DNS issues during build)
+FROM python:3.10-slim
 
 WORKDIR /app
+
+# Install openenv-core and deps (PyPI only, no HF during build)
+RUN pip install --no-cache-dir openenv-core==0.2.1 fastapi uvicorn
 
 # Copy env and openenv_lifeops
 COPY env /app/env
 COPY openenv_lifeops /app/openenv_lifeops
 
 ENV PYTHONPATH="/app:$PYTHONPATH"
-
-# Install openenv-core and deps
-RUN pip install --no-cache-dir openenv-core==0.2.1 fastapi uvicorn
 
 EXPOSE 7860
 
