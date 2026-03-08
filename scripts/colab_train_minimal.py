@@ -75,9 +75,33 @@ from datasets import Dataset
 from trl import SFTTrainer, SFTConfig
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from env.lifeops_env import LifeOpsEnv
-from env.actions import generate_valid_actions
-from agent.llm_agent import _state_to_prompt
+from env.actions import generate_valid_actions, ActionType
 from training.train_rl import collect_trajectory
+
+
+def _state_to_prompt(obs: dict, valid_actions: list) -> str:
+    '''Format observation + valid actions into a prompt (no agent module needed).'''
+    persona = obs.get("persona", {})
+    persona_name = persona.get("name", persona.get("persona_id", "unknown"))
+    calendar = obs.get("calendar", [])
+    cal_str = "empty" if not calendar else f"{len(calendar)} events"
+    opts = []
+    for i, a in enumerate(valid_actions, 1):
+        d = a.to_dict() if hasattr(a, "to_dict") else a
+        at = d.get("action_type", "?")
+        if at == ActionType.block_focus_time.value:
+            start = d.get("new_start_min", 0)
+            dur = d.get("duration_min", 0)
+            h, m = divmod(start or 0, 60)
+            opts.append(f"{i}. block_focus @ {h:02d}:{m:02d} ({dur}min)")
+        elif at in (ActionType.accept_event.value, ActionType.reject_event.value):
+            opts.append(f"{i}. {at.replace('_event','')}")
+        else:
+            ns = d.get("new_start_min", 0)
+            h, m = divmod(ns or 0, 60)
+            opts.append(f"{i}. {at} -> {h:02d}:{m:02d}")
+    return f"Persona: {persona_name}\nCalendar: {cal_str}\nOptions: " + " ".join(opts)
+
 
 # Collect trajectories (local or use LifeOpsEnvAdapter for remote)
 env = LifeOpsEnv(seed=42)
