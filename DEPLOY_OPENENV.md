@@ -2,61 +2,80 @@
 
 To meet the hackathon requirement: **OpenEnv (stable 0.2.1) deployed on HF Spaces**.
 
-**Scope:** This applies to the **entire project**, not just Colab. The OpenEnv environment must be deployed on HF Spaces, and any training (Colab, local, etc.) can connect to it.
+## Prerequisites
 
-## 1. Create a new HF Space
+- Hugging Face account with [token](https://huggingface.co/settings/tokens) (write access)
+- Git with `openenv-integration` branch pushed to origin
 
-1. Go to [huggingface.co/spaces](https://huggingface.co/spaces)
-2. Create new Space
-3. Name: `lifeops-env` (or `YOUR_ORG-lifeops-env`)
-4. **SDK: Docker**
-5. Visibility: Public
+## Step 1: Create the HF Space
 
-## 2. Push the OpenEnv environment
+1. Go to [huggingface.co/new-space](https://huggingface.co/new-space)
+2. **Space name:** `lifeops-env` (or `YOUR_ORG-lifeops-env`)
+3. **SDK:** Select **Docker**
+4. **Visibility:** Public
+5. Click **Create Space**
 
-Push the repo contents to the Space. The Space needs:
+## Step 2: Deploy
 
-- `Dockerfile` (use `Dockerfile.openenv` as the Dockerfile)
-- `env/` folder
-- `openenv_lifeops/` folder
-
-**Option A: From repo root**
+**Option A: Use the deploy script (recommended)**
 
 ```bash
-# Copy Dockerfile.openenv to Dockerfile for the Space
-cp Dockerfile.openenv Dockerfile
-
-# Add the Space as a remote (if not already)
-git remote add lifeops-env https://huggingface.co/spaces/YOUR_ORG/lifeops-env
-
-# Push (use HF token when prompted)
-git push lifeops-env main
+# From repo root, on openenv-integration branch
+chmod +x scripts/deploy_openenv.sh
+./scripts/deploy_openenv.sh openenv-community/lifeops-env
 ```
 
-**Option B: Manual upload**
+When prompted for password, use your HF token.
 
-1. In the Space, go to Files
-2. Upload `Dockerfile.openenv` and rename to `Dockerfile`
-3. Upload the `env/` folder
-4. Upload the `openenv_lifeops/` folder
+**Option B: Manual push**
 
-## 3. Space URL
+```bash
+# Add the Space as a remote
+git remote add lifeops-env https://huggingface.co/spaces/openenv-community/lifeops-env
 
-After deployment, the Space URL will be:
-
-```
-https://YOUR_ORG-lifeops-env.hf.space
+# Push (replace org/space with yours)
+git push lifeops-env openenv-integration:main
 ```
 
-Use this in the Colab script as `LIFEOPS_ENV_URL`.
+Then in the Space's Files tab, ensure `README.md` has `sdk: docker` and `app_port: 7860` in the YAML frontmatter. Copy from `README.lifeops-env` if needed.
 
-## 4. Verify
+## Step 3: Wait for build
+
+HF will build the Docker image. This can take 5–10 minutes. Check the Space's **Logs** tab for progress.
+
+## Step 4: Space URL
+
+After deployment:
+
+```
+https://openenv-community-lifeops-env.hf.space
+```
+
+(Replace `openenv-community` and `lifeops-env` with your org and space name. Use `-` instead of `/` in the URL.)
+
+## Step 5: Verify
 
 ```python
 from openenv_lifeops import LifeOpsEnv, LifeOpsAction
 
-client = LifeOpsEnv(base_url="https://YOUR_ORG-lifeops-env.hf.space")
+client = LifeOpsEnv(base_url="https://openenv-community-lifeops-env.hf.space")
 result = client.reset()
 print(result.observation.observation["scenario_id"])
 client.close()
 ```
+
+## Step 6: Use in Colab
+
+In `scripts/colab_train_minimal.py`, set:
+
+```python
+LIFEOPS_ENV_URL = "https://YOUR_ORG-YOUR_SPACE.hf.space"
+```
+
+Then run Cell 3a to connect to the remote env.
+
+## Troubleshooting
+
+- **Build fails:** Check Logs for errors. Ensure `env/` and `openenv_lifeops/` are in the repo.
+- **Connection refused:** Wait for the build to finish. HF Spaces can take a few minutes to start.
+- **Port issues:** The Dockerfile uses port 7860 (HF default). `README.lifeops-env` sets `app_port: 7860`.

@@ -19,7 +19,7 @@ Requirements:
 # =============================================================================
 # Cell 2: Clone repo and setup path
 # =============================================================================
-# !git clone -q https://github.com/avlukas04/adaptive-planner-env.git
+# !git clone -q -b openenv-integration https://github.com/avlukas04/adaptive-planner-env.git
 # import sys
 # sys.path.insert(0, "adaptive-planner-env")
 
@@ -28,6 +28,7 @@ Requirements:
 # =============================================================================
 """
 # Set your LifeOps OpenEnv Space URL (after deploying)
+# Format: https://ORG-SPACE-NAME.hf.space (replace / with -)
 LIFEOPS_ENV_URL = "https://openenv-community-lifeops-env.hf.space"
 
 from openenv_lifeops.env_adapter import LifeOpsEnvAdapter
