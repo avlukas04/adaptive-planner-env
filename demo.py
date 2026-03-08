@@ -14,6 +14,7 @@ Design goals:
 from __future__ import annotations
 
 import random
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -115,7 +116,7 @@ def render_timeline_html(
 ) -> str:
     """
     Shadcn-like daily timeline: each hour is a row, events are full-width pill rows.
-
+(e)
     Events are rendered as horizontal rows:
       [3px colored left border] Event Name .......... 9:00am–10:00am
     This prevents overflow and truncates cleanly on narrow widths.
@@ -129,11 +130,20 @@ def render_timeline_html(
 
     def row(e: Dict[str, Any], level: str, moved: bool) -> str:
         title = str(e.get("title", e.get("event_id", "Event")))
+        if str(e.get("event_id")) == "__request__":
+            title = "REQUEST: " + title
+        
         s = int(e.get("start_min", 0))
         en = int(e.get("end_min", 0))
         time = f"{_min_to_hhmm(s)}–{_min_to_hhmm(en)}"
-        accent = _event_color(e)
-        if level == "conflict":
+        is_request = str(e.get("event_id", "")) == "__request__"
+
+        # Color mapping:
+        # - request: yellow
+        # - conflict: red (request keeps yellow bg so it's still visually "the request")
+        # - low productivity hours: orange
+        accent = "#facc15" if is_request else _event_color(e)
+        if level in {"conflict", "request_conflict"}:
             accent = "#ef4444"
         elif level == "lowprod":
             accent = "#f59e0b"
@@ -142,11 +152,17 @@ def render_timeline_html(
 
         # Requirement: simple inline styles only (no classes) for event bubbles.
         # Also ensure no overflow outside the calendar column.
-        bg = f"{accent}15"
+        border = "4px" if moved else "3px"
+        if is_request:
+            bg = "rgba(250,204,21,0.22)"  # yellow request highlight
+        elif moved:
+            bg = "rgba(34,197,94,0.12)"   # moved event highlight
+        else:
+            bg = f"{accent}15"
         text = f"{title} · {time}{moved_txt}"
         return (
             "<div style=\""
-            f"border-left: 3px solid {accent};"
+            f"border-left: {border} solid {accent};"
             f"background: {bg};"
             "padding: 4px 8px;"
             "border-radius: 4px;"
@@ -253,7 +269,7 @@ def _what_fixed_cards_html(agent: LLMAgent, trajectory: List[Dict[str, Any]]) ->
         info = step.get("info") or {}
         rb = info.get("reward_breakdown") or {}
         req = obs.get("current_request") or {}
-        title = str(req.get("title", "request"))
+        title = str(req.get("title", "request")) or {}
         t = _min_to_hhmm(int(req.get("start_min", a.get("new_start_min") or 0)))
         r = float(step.get("reward", 0.0))
         at = str(a.get("action_type", ""))
@@ -277,8 +293,8 @@ def _what_fixed_cards_html(agent: LLMAgent, trajectory: List[Dict[str, Any]]) ->
         if at == "block_focus_time":
             icon = "🟠"
             if rb.get("deadline_pressure_penalty"):
-                return (icon, f"Goal time protected — urgent deadline", r)
-            return (icon, f"Goal block protected — improved productivity", r)
+                return (icon, "Goal time protected — urgent deadline", r)
+            return (icon, "Goal block protected — improved productivity", r)
         # fallback
         return ("🟠", f"{t} {title} improved schedule", r)
 
@@ -742,14 +758,14 @@ def main() -> None:
     env: LifeOpsEnv = st.session_state.env
     llm_agent: LLMAgent = st.session_state.llm_agent
 
-    # HEADER (clean white top bar)
+    # HEADER (scenario controls + run)
     header = st.container(border=True)
     with header:
         c0, c1, c2, c3, c4 = st.columns([1.3, 1.2, 1.8, 0.9, 1.0])
         with c0:
-            st.markdown("<div style='font-size:22px;font-weight:800'>LifeOps</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size:22px;font-weight:900'>LifeOps — AI Scheduling Agent</div>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='margin-top:-2px;font-size:12px;color:#64748b'>AI Agent that learns your scheduling habits</div>",
+                "<div style='margin-top:-2px;font-size:12px;color:#64748b'>Calendar conflict resolution + preference learning</div>",
                 unsafe_allow_html=True,
             )
         with c1:
@@ -781,42 +797,243 @@ def main() -> None:
         with c4:
             run_click = st.button("▶ Run Agent", type="primary", use_container_width=True)
 
-    # Main layout
-    left, right = st.columns([1.05, 1.0], gap="large")
+    # Keep the selected scenario "true" to what we display.
+    if "active_scenario" not in st.session_state:
+        st.session_state.active_scenario = None
+    if st.session_state.active_scenario != scenario:
+        env.reset(scenario_id=scenario)
+        st.session_state.trace = None
+        st.session_state.trajectory = []
+        st.session_state.before_obs = None
+        st.session_state.after_obs = None
+        st.session_state.episode_reward = 0.0
+        st.session_state.active_scenario = scenario
 
-    with left:
-        cal_card = st.container(border=True)
-        with cal_card:
-            st.subheader("Live Calendar")
-            st.caption("Events update as the agent accepts or rejects them")
+    # Run with a tiny narrative animation.
+    if run_click:
+        env.reset(scenario_id=scenario)
+        with st.status("Incoming request received…", expanded=True) as status:
+            st.write("Checking calendar conflicts…")
+            time.sleep(0.15)
+            st.write("Estimating user preferences…")
+            time.sleep(0.15)
+            st.write("Selecting best action…")
+            trace, total, traj, before_obs, after_obs = run_one_episode(env, agent_kind=agent_kind, llm_agent=llm_agent)
+            status.update(label="Decision made. Schedule updated.", state="complete")
+        st.session_state.trace = trace
+        st.session_state.trajectory = traj
+        st.session_state.before_obs = before_obs
+        st.session_state.after_obs = after_obs
+        st.session_state.episode_reward = total
 
-            if run_click:
-                env.reset(scenario_id=scenario)
-                trace, total, traj, before_obs, after_obs = run_one_episode(env, agent_kind=agent_kind, llm_agent=llm_agent)
-                st.session_state.trace = trace
-                st.session_state.trajectory = traj
-                st.session_state.before_obs = before_obs
-                st.session_state.after_obs = after_obs
-                st.session_state.episode_reward = total
+    # SOURCE observations.
+    before_obs = st.session_state.before_obs or env.observation()
+    after_obs = st.session_state.after_obs
+    traj: List[Dict[str, Any]] = st.session_state.trajectory or []
 
-            before_obs = st.session_state.before_obs or env.observation()
-            after_obs = st.session_state.after_obs or env.observation()
+    def _overlap(a_s: int, a_e: int, b_s: int, b_e: int) -> bool:
+        return a_s < b_e and b_s < a_e
 
+    def _cancel_pct_for_request(obs: Dict[str, Any]) -> Tuple[Optional[int], int]:
+        req = obs.get("current_request") or {}
+        start = int(req.get("start_min", 0))
+        day = str(obs.get("day_of_week", ""))
+        bucket = (start // 60) * 60
+        row = llm_agent.preference_model.get((day, bucket), {}) if getattr(llm_agent, "preference_model", None) else {}
+        accepted = int(row.get("accepted", 0))
+        rejected = int(row.get("rejected", 0))
+        total = accepted + rejected
+        if total < 1:
+            return (None, 0)
+        return (int(round(100.0 * (rejected / float(total)))), total)
+
+    def _pick_key_step(trajectory: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not trajectory:
+            return None
+        request_types = {"accept_event", "reject_event", "reschedule_event", "propose_new_time", "block_focus_time"}
+        request_steps = [
+            s
+            for s in trajectory
+            if str((s.get("action") or {}).get("action_type", "")) in request_types
+            and (s.get("obs") or {}).get("current_request") is not None
+        ]
+        candidates = request_steps if request_steps else trajectory
+        return max(candidates, key=lambda s: abs(float(s.get("reward", 0.0))))
+
+    # -------------------------------------------------
+    # Step 1 — Current Schedule (Before)
+    # -------------------------------------------------
+    step1 = st.container(border=True)
+    with step1:
+        st.subheader("Step 1 — Current Schedule (Before Agent)")
+        st.caption("The messy calendar the agent starts from. Conflicts are red; low-productivity meeting times are orange.")
+        base_calendar = list(before_obs.get("calendar", []))
+        base_levels = _issue_levels_for_before(before_obs, base_calendar)
+        st.markdown(render_timeline_html(before_obs, base_calendar, issue_levels=base_levels), unsafe_allow_html=True)
+
+        st.markdown(
+            "<div style='margin-top:8px;color:#64748b;font-size:12px'>"
+            "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
+            "<span style='width:10px;height:10px;border-radius:999px;background:#60a5fa;display:inline-block'></span>Work</span>"
+            "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
+            "<span style='width:10px;height:10px;border-radius:999px;background:#2ecc71;display:inline-block'></span>Personal</span>"
+            "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
+            "<span style='width:10px;height:10px;border-radius:999px;background:#a855f7;display:inline-block'></span>Focus</span>"
+            "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
+            "<span style='width:10px;height:10px;border-radius:999px;background:#facc15;display:inline-block'></span>Request</span>"
+            "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
+            "<span style='width:10px;height:10px;border-radius:999px;background:#ef4444;display:inline-block'></span>Conflict</span>"
+            "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
+            "<span style='width:10px;height:10px;border-radius:999px;background:#f59e0b;display:inline-block'></span>Low hours</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # -------------------------------------------------
+    # Step 2 — Incoming Request
+    # -------------------------------------------------
+    step2 = st.container(border=True)
+    with step2:
+        st.subheader("Step 2 — Incoming Request")
+        st.caption("What problem did the agent face?")
+
+        req = before_obs.get("current_request")
+        if not req:
+            st.info("No incoming request in this scenario.")
+        else:
+            title = str(req.get("title", "Event"))
+            start_min = int(req.get("start_min", 0))
+            end_min = int(req.get("end_min", 0))
+            start = _min_to_hhmm(start_min)
+            end = _min_to_hhmm(end_min)
+            duration = max(0, end_min - start_min)
+            location = str(req.get("location", "Unknown"))
+
+            st.markdown(f"**Event:** {title}")
+            st.markdown(f"**Time:** {start} – {end}  ({duration} minutes)")
+            st.markdown(f"**Location:** {location}")
+
+            cal = list(before_obs.get("calendar", []))
+            overlaps = [str(e.get("title", e.get("event_id", "event"))) for e in cal if _overlap(start_min, end_min, int(e.get("start_min", 0)), int(e.get("end_min", 0)))]
+            cancel_pct, seen = _cancel_pct_for_request(before_obs)
+
+            st.markdown("**Conflict / context**")
+            bullets: List[str] = []
+            if overlaps:
+                bullets.append(f"🔴 Overlaps with: {', '.join(overlaps[:3])}")
+            else:
+                bullets.append("✔ No direct time overlap with existing events")
+            if cancel_pct is None:
+                bullets.append("🧠 Preference: no prior data for this time window yet")
+            else:
+                bullets.append(f"🧠 Preference: user rejects similar requests ~{cancel_pct}% of the time (n={seen})")
+            st.markdown("\n".join(f"- {b}" for b in bullets))
+
+            st.markdown("**Agent must choose**")
+            st.markdown(
+                """
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+  <span style="padding:6px 10px;border-radius:999px;background:#f1f5f9;font-weight:800;font-size:12px">Accept</span>
+  <span style="padding:6px 10px;border-radius:999px;background:#f1f5f9;font-weight:800;font-size:12px">Reject</span>
+  <span style="padding:6px 10px;border-radius:999px;background:#f1f5f9;font-weight:800;font-size:12px">Reschedule</span>
+  <span style="padding:6px 10px;border-radius:999px;background:#f1f5f9;font-weight:800;font-size:12px">Protect Focus</span>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+    # -------------------------------------------------
+    # Step 3 — Agent Decision (hero)
+    # -------------------------------------------------
+    step3 = st.container(border=True)
+    with step3:
+        st.subheader("Step 3 — Agent Decision")
+        st.caption("What decision did the agent make?")
+
+        key_step = _pick_key_step(traj)
+        if not key_step:
+            st.write("Run the agent to see the decision, reasoning, and reward impact.")
+        else:
+            obs = key_step.get("obs") or {}
+            action = key_step.get("action") or {}
+            info = key_step.get("info") or {}
+            rb = info.get("reward_breakdown") or {}
+            req = obs.get("current_request") or {}
+
+            at = str(action.get("action_type", ""))
+            at_label = at.replace("_", " ").upper()
+            step_reward = float(key_step.get("reward", 0.0))
+
+            req_title = str(req.get("title", "request"))
+            req_start = _min_to_hhmm(int(req.get("start_min", 0)))
+
+            st.markdown(
+                f"<div style='font-size:28px;font-weight:950;margin-top:4px'>{at_label}</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"**Request:** {req_start} {req_title}")
+
+            reasons: List[str] = []
+            if rb.get("overlap_penalty") or rb.get("travel_infeasible_penalty"):
+                reasons.append("Avoid conflict / infeasible travel")
+            if at == "block_focus_time" or rb.get("task_progress_reward") or rb.get("deadline_pressure_penalty"):
+                reasons.append("Protect focus time to improve goal completion")
+
+            cancel_pct, seen = _cancel_pct_for_request(obs)
+            if cancel_pct is not None and cancel_pct >= 50 and seen >= 2:
+                reasons.append(f"User often rejects meetings at this time (~{cancel_pct}%, n={seen})")
+
+            new_start = action.get("new_start_min")
+            if at in {"reschedule_event", "propose_new_time"} and new_start is not None:
+                reasons.append(f"Proposed new time: {_min_to_hhmm(int(new_start))}")
+
+            if not reasons:
+                reasons.append("Best fit for schedule constraints + learned habits")
+
+            st.markdown("**Reasoning**")
+            st.markdown("\n".join(f"- {r}" for r in reasons[:3]))
+
+            st.markdown("**Reward impact**")
+            st.markdown(
+                f"<div style='display:flex;gap:16px;align-items:baseline;margin-top:2px'>"
+                f"<div style='font-size:34px;font-weight:950;color:#16a34a'>{step_reward:+.2f}</div>"
+                f"<div style='color:#64748b;font-size:13px;font-weight:800'>step reward</div>"
+                f"<div style='margin-left:10px;font-size:26px;font-weight:950;color:#0f172a'>{st.session_state.episode_reward:+.2f}</div>"
+                f"<div style='color:#64748b;font-size:13px;font-weight:800'>episode total</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # -------------------------------------------------
+    # Step 4 — Improved Schedule (After)
+    # -------------------------------------------------
+    step4 = st.container(border=True)
+    with step4:
+        st.subheader("Step 4 — Updated Schedule (After)")
+        st.caption("Did the schedule get better? Compare before vs after.")
+
+        if not after_obs:
+            st.info("Run the agent to see the improved schedule.")
+        else:
             before_calendar = list(before_obs.get("calendar", []))
             req = before_obs.get("current_request")
+            before_levels = _issue_levels_for_before(before_obs, before_calendar)
             if req is not None:
                 tentative = dict(req)
                 tentative["event_id"] = "__request__"
                 before_calendar.append(tentative)
+                before_levels["__request__"] = "request"
 
-            # Build issue levels for BEFORE (conflict vs low productivity hours).
-            before_levels = _issue_levels_for_before(before_obs, before_calendar)
-
-            traj: List[Dict[str, Any]] = st.session_state.trajectory or []
-            moved_ids = _moved_event_ids_from_trajectory(traj)
+                # If the request overlaps anything, mark it as a conflict-request (red accent, yellow bg).
+                rs = int(req.get("start_min", 0))
+                re_ = int(req.get("end_min", 0))
+                if any(_overlap(rs, re_, int(e.get("start_min", 0)), int(e.get("end_min", 0))) for e in list(before_obs.get("calendar", []))):
+                    before_levels["__request__"] = "request_conflict"
 
             after_calendar = list(after_obs.get("calendar", []))
-            after_levels: Dict[str, str] = {}  # "After" should be clean; show conflict only if any remain
+            moved_ids = _moved_event_ids_from_trajectory(traj)
+
+            after_levels: Dict[str, str] = {}
             after_conf_ids, _ = _compute_conflict_event_ids(after_obs, after_calendar)
             for eid in after_conf_ids:
                 after_levels[str(eid)] = "conflict"
@@ -824,29 +1041,34 @@ def main() -> None:
             before_html = render_timeline_html(before_obs, before_calendar, issue_levels=before_levels)
             after_html = render_timeline_html(after_obs, after_calendar, issue_levels=after_levels, moved_event_ids=moved_ids)
 
-            # Two timelines side-by-side at exactly 50% / 50%, with a centered divider+arrow overlay.
+            key_step = _pick_key_step(traj)
+            arrow = "Schedule improved →"
+            if key_step:
+                a = (key_step.get("action") or {}).get("action_type", "")
+                arrow = str(a).replace("_", " ").title() + " →"
+
             st.markdown(
                 f"""
 <style>
-  .ba3 {{
+  .ba4 {{
     position: relative;
     display: flex;
     gap: 0;
     width: 100%;
     margin-top: 6px;
   }}
-  .ba3-col {{
+  .ba4-col {{
     width: 50%;
     overflow: hidden;
     padding-right: 10px;
     box-sizing: border-box;
     min-width: 0;
   }}
-  .ba3-col.right {{
+  .ba4-col.right {{
     padding-left: 10px;
     padding-right: 0;
   }}
-  .ba3-divider {{
+  .ba4-divider {{
     position: absolute;
     left: 50%;
     top: 0;
@@ -854,7 +1076,7 @@ def main() -> None:
     width: 0;
     pointer-events: none;
   }}
-  .ba3-divider:before {{
+  .ba4-divider:before {{
     content: "";
     position: absolute;
     left: -0.5px;
@@ -863,7 +1085,7 @@ def main() -> None:
     width: 1px;
     background: #e5e7eb;
   }}
-  .ba3-arrow {{
+  .ba4-arrow {{
     position: absolute;
     left: -18px;
     top: 50%;
@@ -873,23 +1095,26 @@ def main() -> None:
     border-radius: 999px;
     padding: 6px 10px;
     color: #64748b;
-    font-weight: 800;
+    font-weight: 900;
+    font-size: 12px;
   }}
-  .ba3-head {{
-    font-weight: 800;
+  .ba4-head {{
+    font-weight: 900;
     margin-bottom: 6px;
   }}
 </style>
-<div class="ba3">
-  <div class="ba3-col left">
-    <div class="ba3-head" style="color:#64748b">⚠️ Before</div>
+<div class="ba4">
+  <div class="ba4-col left">
+    <div class="ba4-head" style="color:#64748b">Before</div>
     {before_html}
   </div>
-  <div class="ba3-col right">
-    <div class="ba3-head" style="color:#16a34a">✓ After</div>
+  <div class="ba4-col right">
+    <div class="ba4-head" style="color:#16a34a">After</div>
     {after_html}
   </div>
-  <div class="ba3-divider"><div class="ba3-arrow">→</div></div>
+  <div class="ba4-divider">
+    <div class="ba4-arrow">{arrow}</div>
+  </div>
 </div>
 """,
                 unsafe_allow_html=True,
@@ -897,44 +1122,32 @@ def main() -> None:
 
             st.caption(_episode_summary_line(before_obs, after_obs))
 
-            st.markdown(
-                "<div style='margin-top:8px;color:#64748b;font-size:12px'>"
-                "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
-                "<span style='width:10px;height:10px;border-radius:999px;background:#60a5fa;display:inline-block'></span>Work</span>"
-                "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
-                "<span style='width:10px;height:10px;border-radius:999px;background:#2ecc71;display:inline-block'></span>Personal</span>"
-                "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
-                "<span style='width:10px;height:10px;border-radius:999px;background:#a855f7;display:inline-block'></span>Goals</span>"
-                "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
-                "<span style='width:10px;height:10px;border-radius:999px;background:#ef4444;display:inline-block'></span>Conflict</span>"
-                "<span style='display:inline-flex;align-items:center;gap:8px;margin-right:14px'>"
-                "<span style='width:10px;height:10px;border-radius:999px;background:#f59e0b;display:inline-block'></span>Low hours</span>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+    st.divider()
 
-            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-            st.markdown("<div style='font-weight:800'>What the Agent Fixed</div>", unsafe_allow_html=True)
+    # -------------------------------------------------
+    # Learning insights (kept separate from the demo story)
+    # -------------------------------------------------
+    insights = st.container(border=True)
+    with insights:
+        st.subheader("Learning Insights")
+        st.caption("Preference learning + a short decision log (kept separate from the core demo narrative).")
+
+        cA, cB = st.columns([1.1, 0.9], gap="large")
+        with cA:
+            st.markdown("<div style='font-weight:900'>What the Agent Improved</div>", unsafe_allow_html=True)
             st.markdown(_what_fixed_cards_html(llm_agent, traj), unsafe_allow_html=True)
-
-    with right:
-        brain_card = st.container(border=True)
-        with brain_card:
-            st.subheader("Agent Brain")
-            st.caption("Watch the AI explain its decisions in real time")
-            st.markdown(
-                f"<div style='font-size:34px;font-weight:800;margin-top:2px'>{st.session_state.episode_reward:+.2f}</div>",
-                unsafe_allow_html=True,
-            )
-
-            traj: List[Dict[str, Any]] = st.session_state.trajectory or []
+        with cB:
+            st.markdown("**Agent Decision Log (latest 3)**")
             if not traj:
-                st.write("Run an episode to see decisions and learned preferences.")
+                st.write("Run the agent to see recent decisions.")
             else:
-                st.markdown("**Last 5 decisions**")
-                for step in traj[-5:][::-1]:
+                for step in traj[-3:][::-1]:
                     a = (step.get("action") or {}).get("action_type", "")
-                    dot = "#22c55e" if a == "accept_event" else ("#ef4444" if a == "reject_event" else ("#eab308" if a in {"reschedule_event", "propose_new_time"} else "#a855f7"))
+                    dot = (
+                        "#22c55e"
+                        if a == "accept_event"
+                        else ("#ef4444" if a == "reject_event" else ("#eab308" if a in {"reschedule_event", "propose_new_time"} else "#a855f7"))
+                    )
                     line = _format_decision_line(llm_agent, step)
                     st.markdown(
                         f"<div style='display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #e5e7eb'>"
@@ -944,38 +1157,32 @@ def main() -> None:
                         unsafe_allow_html=True,
                     )
 
-                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-                st.markdown("**Learned user preferences**")
-                st.caption("Patterns the agent has discovered about this user")
-                day = str(env.observation().get("day_of_week", ""))
-                for b in _preferences_bullets(llm_agent, day=day):
-                    st.markdown(
-                        f"<div style='padding:6px 0;border-top:1px solid #e5e7eb;color:#0f172a;font-size:13px'>• {b}</div>",
-                        unsafe_allow_html=True,
-                    )
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.markdown("**Learned user preferences**")
+            day = str(before_obs.get("day_of_week", ""))
+            for b in _preferences_bullets(llm_agent, day=day):
+                st.markdown(
+                    f"<div style='padding:6px 0;border-top:1px solid #e5e7eb;color:#0f172a;font-size:13px'>• {b}</div>",
+                    unsafe_allow_html=True,
+                )
+
+        with st.expander("Debug: full action history (optional)", expanded=False):
+            traj2 = st.session_state.trajectory or []
+            if not traj2:
+                st.info("Run an episode to populate action history.")
+            else:
+                table_html, tsv, _total = _action_history_table_html(llm_agent, traj2)
+                st.markdown(table_html, unsafe_allow_html=True)
+                _clipboard_export_button("Export Actions", tsv)
 
     st.divider()
 
-    # Full-width Action History section (below both columns).
-    action_card = st.container(border=True)
-    with action_card:
-        st.subheader("Action History")
-        st.caption("A full log of what the agent did this episode")
-        traj = st.session_state.trajectory or []
-        if not traj:
-            st.info("Run an episode to populate action history.")
-        else:
-            table_html, tsv, total = _action_history_table_html(llm_agent, traj)
-            st.markdown(table_html, unsafe_allow_html=True)
-            _clipboard_export_button("Export Actions", tsv)
-
-    st.divider()
     graph_card = st.container(border=True)
     with graph_card:
-        st.subheader("Reward Graph")
+        st.subheader("Agent Learning (Reward Graph)")
         img_path = Path("training") / "reward_comparison.png"
         if img_path.exists():
-            st.image(str(img_path), caption="Random vs Baseline vs LLM (moving averages)", use_container_width=True)
+            st.image(str(img_path), caption="Episodes vs reward (moving averages)", use_container_width=True)
         else:
             st.info(
                 "No reward comparison plot found at `training/reward_comparison.png`. "
