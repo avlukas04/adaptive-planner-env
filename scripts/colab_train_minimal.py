@@ -1,60 +1,92 @@
 """
-Minimal LifeOps training script for Colab using HuggingFace TRL.
+Minimal LifeOps training script for Colab (Unsloth or HF TRL).
 
-Run in Colab:
-  !pip install -q transformers trl torch
-  !git clone https://github.com/YOUR_USER/adaptive-planner-env.git
-  %run adaptive-planner-env/scripts/colab_train_minimal.py
+Copy each # Cell block into a Colab cell and run. Uses the LifeOps RL environment
+with HF TRL SFTTrainer for policy improvement via supervised fine-tuning on
+high-reward trajectories.
 
-Or paste this into a Colab cell.
+For faster training, optionally use Unsloth: pip install unsloth
 """
 
-# %% [markdown]
-# # LifeOps + HF TRL — Minimal Training
-# Trains an LLM policy on the LifeOps scheduling environment using reward-based optimization.
+# =============================================================================
+# Cell 1: Install dependencies
+# =============================================================================
+# !pip install -q transformers trl torch datasets accelerate python-dotenv
+# # Optional: Unsloth for 2x faster LoRA training
+# # !pip install -q unsloth
 
-# %%
-!pip install -q transformers trl torch python-dotenv
+# =============================================================================
+# Cell 2: Clone repo and setup path
+# =============================================================================
+# !git clone -q https://github.com/avlukas04/adaptive-planner-env.git
+# import sys
+# sys.path.insert(0, "adaptive-planner-env")
 
-# %%
-import os
-import sys
-from pathlib import Path
-
-# Clone or mount repo (adjust path for your setup)
-REPO = Path("adaptive-planner-env")
-if not REPO.exists():
-    !git clone https://github.com/YOUR_USER/adaptive-planner-env.git 2>/dev/null || true
-sys.path.insert(0, str(REPO))
-
-# %%
+# =============================================================================
+# Cell 3: Train with HF TRL SFTTrainer (LifeOps env + reward signal)
+# =============================================================================
+"""
+from datasets import Dataset
+from trl import SFTTrainer, SFTConfig
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from env.lifeops_env import LifeOpsEnv
-from env.scenario_generator import list_scenario_ids
-from training.train_rl import collect_trajectory, train
+from training.train_rl import collect_trajectory
+from agent.llm_agent import _state_to_prompt
+from env.actions import generate_valid_actions
 
-# TRL: we use the env's reward signal for policy improvement
-# This script demonstrates TRL integration — full PPO/DPO would require log-probs from the model
-from trl import PPOTrainer, PPOConfig
-from trl.core import LengthSampler
-
-# %%
-# Collect trajectories from LifeOps env (reward signal for TRL-style optimization)
+# 1. Collect high-reward trajectories from LifeOps env
 env = LifeOpsEnv(seed=42)
-trajectories = []
-for _ in range(5):
-    traj, reward, length, sid, persona = collect_trajectory(env, agent="baseline")
-    trajectories.append({"trajectory": traj, "reward": reward, "scenario_id": sid})
+rows = []
+for _ in range(20):
+    traj, reward, _, _, _ = collect_trajectory(env, agent="baseline")
+    if reward <= 0:
+        continue
+    for step in traj[:4]:
+        obs = step["obs"]
+        action_dict = step["action"]
+        valid = generate_valid_actions(obs)
+        prompt = _state_to_prompt(obs, valid)
+        at = action_dict.get("action_type", "?")
+        idx = next((i + 1 for i, a in enumerate(valid) if a.to_dict().get("action_type") == at), 1)
+        completion = f"Reasoning: Aligned with persona preferences. CHOICE: {idx}"
+        rows.append({"text": prompt + "\n" + completion})
 
-print(f"Collected {len(trajectories)} trajectories")
-print(f"Sample reward: {trajectories[0]['reward']:.2f}")
+if not rows:
+    rows = [{"text": "Persona: Early-bird\nCalendar: empty\nOptions: 1. accept 2. reject\nCHOICE: 1"}]
 
-# %%
-# Train with LLM agent (uses reward from env; TRL provides the optimization framework)
-result = train(
-    num_episodes=10,
-    agent="llm",
-    llm_model_id="google/flan-t5-base",  # Small model for Colab
-    llm_method="vanilla",
-    plot=False,
+dataset = Dataset.from_list(rows)
+print(f"Dataset size: {len(dataset)}")
+
+# 2. SFT with TRL (flan-t5-small for Colab; use flan-t5-base or Phi-3 for better results)
+model_id = "google/flan-t5-small"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+
+config = SFTConfig(
+    output_dir="./lifeops_sft",
+    num_train_epochs=1,
+    per_device_train_batch_size=2,
+    max_seq_length=256,
 )
+trainer = SFTTrainer(
+    model=model,
+    args=config,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    tokenizer=tokenizer,
+)
+trainer.train()
+trainer.save_model("./lifeops_sft")
+print("Done. Model saved to ./lifeops_sft")
+"""
+
+# =============================================================================
+# Cell 4 (alternative): Run train_rl loop only (no TRL, env + Best-of-N / in-context)
+# =============================================================================
+"""
+# Simplest option: run the built-in RL training loop
+from training.train_rl import train
+
+result = train(num_episodes=10, agent="baseline", plot=False)
 print(f"Avg reward: {result['avg_reward']:.2f}")
+"""

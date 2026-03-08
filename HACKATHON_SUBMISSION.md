@@ -47,24 +47,17 @@ https://youtube.com/watch?v=YOUR_VIDEO_ID
 
 ## 4. Minimal Training Script (Unsloth or HF TRL in Colab) *
 
-```python
-# Cell 1: Install
-!pip install -q transformers trl torch python-dotenv
+See `scripts/colab_train_minimal.py` for the full script. Copy each Cell block into a Colab cell.
 
-# Cell 2: Clone repo and setup
-!git clone https://github.com/YOUR_USER/adaptive-planner-env.git
-import sys
-sys.path.insert(0, "adaptive-planner-env")
+**Cell 1 – Install:** `!pip install -q transformers trl torch datasets accelerate python-dotenv`
 
-# Cell 3: Train with LifeOps env (HF TRL-style reward loop)
-from env.lifeops_env import LifeOpsEnv
-from training.train_rl import train
+**Cell 2 – Clone:** `!git clone -q https://github.com/avlukas04/adaptive-planner-env.git` then `sys.path.insert(0, "adaptive-planner-env")`
 
-result = train(num_episodes=10, agent="llm", llm_model_id="google/flan-t5-base", plot=False)
-print(f"Avg reward: {result['avg_reward']:.2f}")
-```
+**Cell 3 – TRL SFT:** Collects high-reward trajectories from the LifeOps env, builds a dataset of (prompt, completion) pairs, and fine-tunes with `trl.SFTTrainer` on `google/flan-t5-small` (Colab-friendly). Optional: use Unsloth for faster LoRA training.
 
-**Note:** The LifeOps env provides the reward signal. We use `trl` (Transformer Reinforcement Learning) for the policy optimization framework. The training loop collects trajectories, computes rewards (overlap penalties, travel feasibility, preference violations), and improves the LLM policy via in-context learning and Best-of-N. See `training/train_rl.py` and `training/policy_improvement.py` for the full implementation.
+**Cell 4 (alternative):** Run `train(num_episodes=10, agent="baseline", plot=False)` for env-only training (Best-of-N, in-context learning).
+
+**Note:** The LifeOps env provides the reward signal. TRL SFT fine-tunes on high-reward trajectories; the built-in loop uses Best-of-N and in-context learning. See `training/train_rl.py` and `training/policy_improvement.py`.
 
 ---
 

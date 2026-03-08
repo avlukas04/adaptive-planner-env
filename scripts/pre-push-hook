@@ -1,0 +1,16 @@
+#!/bin/sh
+# Block pushing main to origin. Push your branch instead: git push origin andreas-branch
+remote="$1"
+url="$2"
+
+while read local_ref local_oid remote_ref remote_oid
+do
+  if test "$remote" = "origin" && test "$remote_ref" = "refs/heads/main"
+  then
+    echo "Blocked: pushing main to origin is disabled."
+    echo "Push your branch instead: git push origin andreas-branch"
+    exit 1
+  fi
+done
+
+exit 0
