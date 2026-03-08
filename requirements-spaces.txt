@@ -1,0 +1,5 @@
+# Hugging Face Spaces — minimal deps for Gradio demo
+# Use this as requirements.txt when deploying to HF Spaces
+gradio>=4.0
+python-dotenv>=1.0
+groq>=0.4.0

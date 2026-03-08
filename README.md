@@ -62,10 +62,23 @@ Options: `-n 20` (episodes per agent), `--agents random baseline llm`, `--seed 4
 
 ## Gradio Demo
 
-Interactive scheduling simulator:
+**Week view UI** (recommended) — week calendar, events, tasks, persona selector:
+
+```bash
+PYTHONPATH=. python -m app.week_view
+```
+
+**Simple demo** — scenario + agent simulation:
 
 ```bash
 python app/demo.py
 ```
 
-Pick a scenario and agent (random, baseline, LLM), then run the simulation to see how the agent responds.
+### Google Calendar integration
+
+To sync with Google Calendar:
+
+1. Enable the Calendar API in [Google Cloud Console](https://console.cloud.google.com)
+2. Create OAuth credentials (Desktop app), download as `credentials.json` in the project root
+3. Install: `pip install google-api-python-client google-auth-oauthlib`
+4. Run the week view; on first load it will open a browser to authorize
