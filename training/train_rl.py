@@ -24,7 +24,7 @@ if str(repo_root) not in sys.path:
 from env.actions import Action, mask_illegal_actions
 from env.baseline_agent import choose_baseline_action
 from env.lifeops_env import LifeOpsEnv
-from env.scenario_generator import scenario_ids_by_difficulty
+from env.scenario_generator import edge_case_scenario_ids, scenario_ids_by_difficulty
 from llm_agent import LLMAgent
 
 
@@ -184,6 +184,10 @@ def train(
                 diff = "hard"
             pool = scenario_ids_by_difficulty(diff)
             sid = random.choice(pool) if pool else None
+            # Edge cases ~30% of episodes.
+            edge_ids = edge_case_scenario_ids()
+            if edge_ids and random.random() < 0.30:
+                sid = random.choice(edge_ids)
         else:
             diff = "fixed"
             sid = scenario_id

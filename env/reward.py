@@ -104,6 +104,7 @@ def compute_reward(
     persona: Dict[str, Any] = next_state["persona"]
     travel_times = next_state.get("travel_times", {})
     action_type = str(action.get("action_type", ""))
+    day_of_week = str(next_state.get("day_of_week", ""))
 
     prev_overlaps = detect_overlaps(prev_events)
     next_overlaps = detect_overlaps(next_events)
@@ -177,9 +178,13 @@ def compute_reward(
     # calendar is feasible, reward it more strongly.
     if action_type in {"accept_event", "reschedule_event"} and next_state.get("last_added_event") is not None:
         if not next_overlaps and not issues:
-            # Strong, clearly positive signal.
-            reward += 4.0
-            breakdown["feasible_schedule_bonus"] = 4.0
+            # Strong, clearly positive signal. Scale with importance so that
+            # low-importance accepts don't dominate decisions.
+            handled_req = next_state.get("last_handled_request") or {}
+            imp = int(handled_req.get("importance", 1))
+            bonus = 4.0 if imp >= 2 else 2.0
+            reward += bonus
+            breakdown["feasible_schedule_bonus"] = bonus
 
     # Propose_new_time doesn't schedule, but suggesting a feasible alternative
     # is still useful (smaller reward than actually scheduling).
@@ -191,6 +196,62 @@ def compute_reward(
         if not detect_overlaps(sim_events) and not travel_issues(sim_events, travel_times, start_location=persona.get("home_location")):
             reward += 2.0
             breakdown["feasible_proposal_bonus"] = 2.0
+
+    # Edge-case shaping: flexible=False requests should not be rescheduled lightly.
+    handled_req = next_state.get("last_handled_request") or {}
+    if action_type in {"reschedule_event", "propose_new_time"} and handled_req:
+        if bool(handled_req.get("flexible", True)) is False:
+            reward -= 5.0
+            breakdown["inflexible_reschedule_penalty"] = -5.0
+
+    # Cascading conflict shaping: if we accept a low-importance meeting that overlaps a
+    # future inflexible important request (preview), penalize the choice.
+    if action_type == "accept_event" and handled_req:
+        imp = int(handled_req.get("importance", 1))
+        if imp <= 1:
+            preview = next_state.get("upcoming_requests_preview") or []
+            a_s = int(handled_req.get("start_min", 0))
+            a_e = int(handled_req.get("end_min", 0))
+            for r in preview:
+                if int(r.get("importance", 1)) >= 3 and bool(r.get("flexible", True)) is False:
+                    r_s = int(r.get("start_min", 0))
+                    r_e = int(r.get("end_min", 0))
+                    if a_s < r_e and r_s < a_e:
+                        reward -= 3.0
+                        breakdown["cascade_penalty"] = -3.0
+                        break
+
+    # Edge-case shaping: Monday mood pattern (cancels low-importance meetings).
+    # If it's Monday and we accept a low-importance meeting, penalize.
+    if day_of_week.lower() == "monday" and action_type == "accept_event" and handled_req:
+        if int(handled_req.get("importance", 1)) <= 2:
+            reward -= 4.0
+            breakdown["monday_cancellation_penalty"] = -4.0
+
+    # Edge-case shaping: deadline pressure.
+    # If there is a task due today/tomorrow and still lots of remaining work,
+    # apply a small per-step penalty to encourage focus blocks earlier.
+    tasks_next = next_state.get("tasks", []) or []
+    urgent_remaining = 0
+    for t in tasks_next:
+        due = t.get("due_in_days")
+        if due is None:
+            continue
+        if int(due) <= 1:
+            urgent_remaining += int(t.get("remaining_minutes", 0))
+    if urgent_remaining > 0:
+        # Scale gently; shouldn't dominate but should steer decisions.
+        pen = -min(2.0, 0.01 * float(urgent_remaining))
+        reward += pen
+        breakdown["deadline_pressure_penalty"] = pen
+
+    # Truncation penalty: if the episode ended due to step limit with goals unfinished,
+    # apply a one-time penalty to discourage "accept everything" behavior under deadlines.
+    if bool(next_state.get("_truncated", False)):
+        remaining = sum(int(t.get("remaining_minutes", 0)) for t in tasks_next)
+        if remaining > 0:
+            reward -= 4.0
+            breakdown["truncation_goal_miss_penalty"] = -4.0
 
     # Task progress / goal shaping: reward reducing remaining minutes.
     prev_remaining = sum(int(t.get("remaining_minutes", 0)) for t in prev_state.get("tasks", []) or [])

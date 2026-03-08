@@ -32,7 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from env.lifeops_env import LifeOpsEnv  # noqa: E402
 from env.actions import mask_illegal_actions  # noqa: E402
-from env.scenario_generator import scenario_ids_by_difficulty  # noqa: E402
+from env.scenario_generator import edge_case_scenario_ids, scenario_ids_by_difficulty  # noqa: E402
 from env.baseline_agent import choose_baseline_action  # noqa: E402
 from llm_agent import LLMAgent  # noqa: E402
 
@@ -220,6 +220,7 @@ def main() -> None:
     rng = random.Random(args.seed)
     # Curriculum schedule: easy -> medium -> hard (ramp every 20 episodes).
     episode_scenarios: List[str] = []
+    edge_ids = edge_case_scenario_ids()
     for ep in range(1, int(args.episodes) + 1):
         if ep <= 20:
             diff = "easy"
@@ -230,7 +231,11 @@ def main() -> None:
         pool = scenario_ids_by_difficulty(diff)
         if not pool:
             pool = scenario_ids_by_difficulty("hard")
-        episode_scenarios.append(rng.choice(pool))
+        # Edge cases should appear ~30% of episodes.
+        if edge_ids and rng.random() < 0.30:
+            episode_scenarios.append(rng.choice(edge_ids))
+        else:
+            episode_scenarios.append(rng.choice(pool))
 
     # Separate env instances for isolation/repeatability.
     env_random = LifeOpsEnv(seed=args.seed)

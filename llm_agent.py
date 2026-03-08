@@ -16,7 +16,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 
 # Hackathon-friendly: allow `python llm_agent.py` from repo root.
@@ -130,6 +130,11 @@ def summarize_state_for_llm(state: dict) -> str:
 
     lines: List[str] = []
 
+    day = str(state.get("day_of_week", ""))
+    if day:
+        lines.append(f"Day: {day}")
+        lines.append("")
+
     # Calendar summary: show up to N upcoming events (time + title).
     lines.append("Calendar today:")
     if not calendar:
@@ -225,6 +230,30 @@ def summarize_state_for_llm(state: dict) -> str:
                 travel_notes.append(f"request→next travel impossible (need {need}m, have {max(avail, 0)}m)")
         if travel_notes:
             lines.append("Travel issue: " + "; ".join(travel_notes[:2]))
+
+    # Upcoming request preview (helps with cascading conflict scenarios).
+    preview = state.get("upcoming_requests_preview") or []
+    if preview:
+        items = []
+        for r in preview[:2]:
+            s = _min_to_hhmm(int(r.get("start_min", 0)))
+            e = _min_to_hhmm(int(r.get("end_min", 0)))
+            title = str(r.get("title", "Untitled"))
+            imp = int(r.get("importance", 1))
+            flex = bool(r.get("flexible", True))
+            items.append(f"{s}-{e} {title} (imp={imp}, flex={flex})")
+        lines.append("")
+        lines.append("Upcoming requests (preview): " + " | ".join(items))
+
+    # Goal/deadline highlight.
+    tasks = state.get("tasks", []) or []
+    urgent = [t for t in tasks if t.get("due_in_days") is not None and int(t.get("due_in_days")) <= 1 and int(t.get("remaining_minutes", 0)) > 0]
+    if urgent:
+        t = urgent[0]
+        lines.append("")
+        lines.append(
+            f"URGENT GOAL: {t.get('title','goal')} due_in_days={int(t.get('due_in_days'))} remaining_minutes={int(t.get('remaining_minutes', 0))}"
+        )
 
     return "\n".join(lines).strip()
 
@@ -476,8 +505,8 @@ class LLMAgent:
     episode_memory: List[EpisodeMemory] = None  # type: ignore[assignment]
     top_success_examples: List[str] = None  # type: ignore[assignment]
     # Persistent user preference model across episodes.
-    # hour_bucket_minute -> {"accepted": int, "rejected": int, "good": int, "bad": int}
-    preference_model: Dict[int, Dict[str, int]] = None  # type: ignore[assignment]
+    # (day_of_week, hour_bucket_minute) -> {"accepted": int, "rejected": int, "good": int, "bad": int}
+    preference_model: Dict[Tuple[str, int], Dict[str, int]] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         # Keep attributes mutable but initialized.
@@ -488,11 +517,12 @@ class LLMAgent:
         if self.preference_model is None:
             self.preference_model = {}
 
-    def _update_preference(self, bucket_min: int, *, accepted: bool, reward: float) -> None:
-        row = self.preference_model.get(bucket_min)
+    def _update_preference(self, day: str, bucket_min: int, *, accepted: bool, reward: float) -> None:
+        key = (day, bucket_min)
+        row = self.preference_model.get(key)
         if row is None:
             row = {"accepted": 0, "rejected": 0, "good": 0, "bad": 0}
-            self.preference_model[bucket_min] = row
+            self.preference_model[key] = row
         if accepted:
             row["accepted"] += 1
         else:
@@ -502,8 +532,8 @@ class LLMAgent:
         else:
             row["bad"] += 1
 
-    def _preference_score(self, bucket_min: int) -> float:
-        r = self.preference_model.get(bucket_min) or {"accepted": 0, "rejected": 0, "good": 0, "bad": 0}
+    def _preference_score(self, day: str, bucket_min: int) -> float:
+        r = self.preference_model.get((day, bucket_min)) or {"accepted": 0, "rejected": 0, "good": 0, "bad": 0}
         return float(r["accepted"] - r["rejected"]) + 0.5 * float(r["good"] - r["bad"])
 
     def summarize_preference_model_for_prompt(self, state: Dict[str, Any]) -> str:
@@ -517,14 +547,17 @@ class LLMAgent:
         if not self.preference_model:
             return "Learned time preferences: (no history yet)"
 
+        day = str(state.get("day_of_week", ""))
         scored: List[Tuple[int, float, int]] = []
-        for b, row in self.preference_model.items():
+        for (d, b), row in self.preference_model.items():
+            if d != day:
+                continue
             seen = int(row.get("accepted", 0) + row.get("rejected", 0))
             if seen < 2:
                 continue
-            scored.append((int(b), self._preference_score(int(b)), seen))
+            scored.append((int(b), self._preference_score(day, int(b)), seen))
         if not scored:
-            return "Learned time preferences: (not enough history yet)"
+            return f"Learned time preferences for {day}: (not enough history yet)"
 
         scored.sort(key=lambda t: t[1], reverse=True)
         top = scored[:3]
@@ -536,14 +569,14 @@ class LLMAgent:
         req = state.get("current_request")
         if req is not None:
             rb = _bucket_minute(int(req.get("start_min", 0)), 60)
-            rs = self._preference_score(rb)
-            rrow = self.preference_model.get(rb) or {}
+            rs = self._preference_score(day, rb)
+            rrow = self.preference_model.get((day, rb)) or {}
             seen = int(rrow.get("accepted", 0) + rrow.get("rejected", 0))
             current = f"current={_fmt_bucket(rb)} score={rs:+.1f} seen={seen}x"
         else:
             current = "current=(none)"
 
-        return f"Learned time preferences (hour buckets): prefer {fmt(top)} | avoid {fmt(bottom)} | {current}"
+        return f"Learned time preferences for {day} (hour buckets): prefer {fmt(top)} | avoid {fmt(bottom)} | {current}"
 
     def _ensure_local_model(self) -> None:
         if self._hf_model is not None and self._hf_tokenizer is not None:
@@ -661,8 +694,44 @@ class LLMAgent:
                 return focus[0]
             return actions[0]
 
+        day = str(state.get("day_of_week", ""))
         bucket = _bucket_minute(int(req.get("start_min", 0)), 60)
-        score = self._preference_score(bucket)
+        score = self._preference_score(day, bucket)
+
+        # Edge case: urgent goals due today/tomorrow should be prioritized.
+        tasks = state.get("tasks", []) or []
+        urgent_remaining = 0
+        for t in tasks:
+            if t.get("due_in_days") is None:
+                continue
+            if int(t.get("due_in_days")) <= 1:
+                urgent_remaining += int(t.get("remaining_minutes", 0))
+        if urgent_remaining >= 60:
+            # If there's meaningful urgent work left, prefer a focus block now
+            # unless the incoming request is very important.
+            imp = int(req.get("importance", 1))
+            if imp < 3:
+                focus = [a for a in actions if a.action_type == ActionType.block_focus_time]
+                if focus:
+                    focus.sort(key=lambda a: (int(a.new_start_min or 0), -int(a.duration_min or 0)))
+                    return focus[0]
+
+        # Edge case: cascading conflicts. If accepting this (low) meeting overlaps
+        # a future inflexible important request (preview), avoid accepting.
+        preview = state.get("upcoming_requests_preview") or []
+        if int(req.get("importance", 1)) <= 1 and preview:
+            a_s = int(req.get("start_min", 0))
+            a_e = int(req.get("end_min", 0))
+            for r in preview:
+                if int(r.get("importance", 1)) >= 3 and bool(r.get("flexible", True)) is False:
+                    r_s = int(r.get("start_min", 0))
+                    r_e = int(r.get("end_min", 0))
+                    if a_s < r_e and r_s < a_e:
+                        # Prefer rejecting the low meeting to preserve the slot.
+                        rej = next((a for a in actions if a.action_type == ActionType.reject_event), None)
+                        if rej is not None:
+                            return rej
+                        break
 
         # Helper: pick best reschedule/propose candidate according to learned preference score.
         def best_time_shift(action_type: ActionType) -> Optional[Action]:
@@ -671,7 +740,7 @@ class LLMAgent:
                 return None
             cands.sort(
                 key=lambda a: (
-                    -self._preference_score(_bucket_minute(int(a.new_start_min or 0), 60)),
+                    -self._preference_score(day, _bucket_minute(int(a.new_start_min or 0), 60)),
                     int(a.new_start_min or 0),
                 )
             )
@@ -700,7 +769,7 @@ class LLMAgent:
         if res is not None:
             # Only do this if it moves into a meaningfully better bucket.
             new_bucket = _bucket_minute(int(res.new_start_min or 0), 60)
-            if self._preference_score(new_bucket) > score + 0.5:
+            if self._preference_score(day, new_bucket) > score + 0.5:
                 return res
         if accept is not None:
             return accept
@@ -724,6 +793,9 @@ class LLMAgent:
         memory_lines.append(
             "Checklist: consult preferences FIRST. If the request time bucket is in 'avoid', "
             "prefer reschedule_event/propose_new_time/reject_event. If in 'prefer', accept_event if feasible."
+        )
+        memory_lines.append(
+            "Also check day-of-week patterns (e.g., Monday cancellations) and URGENT GOAL deadlines before deciding."
         )
         if self.episode_memory:
             memory_lines.append("Recent episode feedback (to improve reward):")
@@ -823,6 +895,7 @@ class LLMAgent:
             req = obs.get("current_request")
             if req is None:
                 continue
+            day = str(obs.get("day_of_week", ""))
 
             if at in {"accept_event", "reject_event"}:
                 start_min = int(req.get("start_min", 0))
@@ -835,7 +908,7 @@ class LLMAgent:
             accepted = at in {"accept_event", "reschedule_event"}
             rejected = at == "reject_event"
             if accepted or rejected:
-                self._update_preference(bucket, accepted=accepted, reward=r)
+                self._update_preference(day, bucket, accepted=accepted, reward=r)
 
 
 if __name__ == "__main__":

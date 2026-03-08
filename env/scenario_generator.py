@@ -45,6 +45,7 @@ class Task:
     title: str
     remaining_minutes: int
     priority: int = 2  # 1=low, 2=medium, 3=high
+    due_in_days: Optional[int] = None  # 0=today, 1=tomorrow, etc. (for deadline pressure)
 
     def to_dict(self) -> Dict:
         return {
@@ -52,6 +53,7 @@ class Task:
             "title": self.title,
             "remaining_minutes": self.remaining_minutes,
             "priority": self.priority,
+            "due_in_days": self.due_in_days,
         }
 
 
@@ -81,6 +83,9 @@ class Scenario:
     tasks: List[Task]
     incoming_requests: List[IncomingRequest]
     travel_times: Dict[str, Dict[str, int]]
+    # Optional metadata to enable "edge case" behavior.
+    day_of_week: str = "Wednesday"  # Monday..Sunday
+    tags: Optional[List[str]] = None
 
 
 def default_travel_times() -> Dict[str, Dict[str, int]]:
@@ -143,6 +148,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Thursday",
+            tags=["easy"],
         ),
         Scenario(
             scenario_id="easy_2",
@@ -166,6 +173,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Tuesday",
+            tags=["easy"],
         ),
 
         # ---------------------------
@@ -182,7 +191,7 @@ def sample_scenarios() -> List[Scenario]:
                 Event("e3", "Call with client", h2m(15, 0), h2m(15, 30), "Office", importance=2),
                 Event("e4", "Gym", h2m(18, 0), h2m(19, 0), "Gym", importance=1, kind="personal"),
             ],
-            tasks=[Task("t1", "Edit portfolio", remaining_minutes=60, priority=2)],
+            tasks=[Task("t1", "Edit portfolio", remaining_minutes=60, priority=2, due_in_days=3)],
             incoming_requests=[
                 IncomingRequest(
                     "r1",
@@ -196,6 +205,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Wednesday",
+            tags=["medium"],
         ),
         Scenario(
             scenario_id="medium_2",
@@ -207,7 +218,7 @@ def sample_scenarios() -> List[Scenario]:
                 Event("e3", "Work block", h2m(13, 0), h2m(14, 30), "Office", importance=2, kind="focus"),
                 Event("e4", "School pickup", h2m(15, 30), h2m(16, 0), "School", importance=3, kind="obligation"),
             ],
-            tasks=[Task("t1", "Prepare report", remaining_minutes=45, priority=3)],
+            tasks=[Task("t1", "Prepare report", remaining_minutes=45, priority=3, due_in_days=2)],
             incoming_requests=[
                 IncomingRequest(
                     "r1",
@@ -221,6 +232,134 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Friday",
+            tags=["medium"],
+        ),
+
+        # -------------------------
+        # EDGE CASE scenarios (hard)
+        # -------------------------
+        # These are designed so the fixed-rule baseline tends to do worse than
+        # an LLM that can look at patterns, upcoming requests, and deadlines.
+        Scenario(
+            scenario_id="edge_cascade_1",
+            name="Edge: cascading conflicts (protect inflexible obligations)",
+            persona_id="early_bird_engineer",
+            calendar=[
+                Event("e1", "Deep work", h2m(9, 0), h2m(10, 0), "Office", importance=2, kind="focus"),
+                Event("e2", "Team update", h2m(12, 0), h2m(12, 30), "Office", importance=2),
+                Event("e3", "Wrap up", h2m(17, 0), h2m(17, 30), "Office", importance=1, kind="personal"),
+            ],
+            tasks=[Task("t1", "Write spec", remaining_minutes=60, priority=3, due_in_days=1)],
+            incoming_requests=[
+                # Current (low) request overlaps the first inflexible request.
+                IncomingRequest(
+                    "r_low",
+                    "Optional vendor intro",
+                    h2m(10, 0),
+                    h2m(10, 30),
+                    "Office",
+                    importance=1,
+                    from_person="Vendor",
+                    flexible=True,
+                ),
+                IncomingRequest(
+                    "r_imp1",
+                    "Legal review (inflexible)",
+                    h2m(10, 0),
+                    h2m(10, 30),
+                    "Office",
+                    importance=3,
+                    from_person="Legal",
+                    flexible=False,
+                ),
+                IncomingRequest(
+                    "r_imp2",
+                    "Security sign-off (inflexible)",
+                    h2m(10, 30),
+                    h2m(11, 0),
+                    "Office",
+                    importance=3,
+                    from_person="Security",
+                    flexible=False,
+                ),
+            ],
+            travel_times=tt,
+            day_of_week="Wednesday",
+            tags=["edge", "cascade"],
+        ),
+        Scenario(
+            scenario_id="edge_mood_monday_1",
+            name="Edge: Monday mood (historically cancels)",
+            persona_id="night_owl_creator",
+            calendar=[
+                Event("e1", "Creative block", h2m(11, 0), h2m(12, 30), "Home", importance=2, kind="focus"),
+                Event("e2", "Short errands", h2m(16, 0), h2m(16, 30), "Downtown", importance=1, kind="personal"),
+            ],
+            tasks=[Task("t1", "Ship draft", remaining_minutes=60, priority=2, due_in_days=2)],
+            incoming_requests=[
+                IncomingRequest(
+                    "r1",
+                    "Casual sync",
+                    h2m(12, 30),
+                    h2m(13, 0),
+                    "Home",
+                    importance=1,
+                    from_person="Friend",
+                    flexible=True,
+                )
+            ],
+            travel_times=tt,
+            day_of_week="Monday",
+            tags=["edge", "mood_monday"],
+        ),
+        Scenario(
+            scenario_id="edge_deadline_1",
+            name="Edge: goal deadline pressure (due today)",
+            persona_id="busy_parent",
+            calendar=[
+                Event("e1", "School drop-off", h2m(8, 30), h2m(9, 0), "School", importance=3, kind="obligation"),
+                Event("e2", "Work block", h2m(9, 30), h2m(11, 0), "Office", importance=2, kind="focus"),
+                Event("e3", "School pickup", h2m(15, 30), h2m(16, 0), "School", importance=3, kind="obligation"),
+            ],
+            tasks=[
+                Task("goal1", "Startup pitch deck (DUE TODAY)", remaining_minutes=180, priority=3, due_in_days=0),
+            ],
+            incoming_requests=[
+                IncomingRequest(
+                    "r1",
+                    "Status meeting",
+                    h2m(11, 0),
+                    h2m(11, 30),
+                    "Office",
+                    importance=2,
+                    from_person="Manager",
+                    flexible=True,
+                ),
+                IncomingRequest(
+                    "r2",
+                    "Client call",
+                    h2m(13, 0),
+                    h2m(13, 30),
+                    "Office",
+                    importance=2,
+                    from_person="Client",
+                    flexible=True,
+                ),
+                IncomingRequest(
+                    "r3",
+                    "Optional lunch",
+                    h2m(12, 0),
+                    h2m(12, 30),
+                    "Office",
+                    importance=1,
+                    from_person="Colleague",
+                    flexible=True,
+                ),
+            ],
+            travel_times=tt,
+            day_of_week="Thursday",
+            tags=["edge", "deadline"],
         ),
 
         Scenario(
@@ -245,6 +384,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Wednesday",
+            tags=["hard"],
         ),
         Scenario(
             scenario_id="s2_travel_tight",
@@ -267,6 +408,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Tuesday",
+            tags=["hard"],
         ),
         Scenario(
             scenario_id="s3_focus_vs_meeting",
@@ -292,6 +435,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Thursday",
+            tags=["hard"],
         ),
         Scenario(
             scenario_id="s4_parent_pickup",
@@ -315,6 +460,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Friday",
+            tags=["hard"],
         ),
         Scenario(
             scenario_id="s5_late_meeting",
@@ -337,6 +484,8 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
+            day_of_week="Monday",
+            tags=["hard"],
         ),
     ]
 
@@ -372,4 +521,9 @@ def scenario_ids_by_difficulty(difficulty: str) -> List[str]:
         return [sid for sid in all_ids if not (sid.startswith("easy_") or sid.startswith("medium_"))]
     # Unknown difficulty => all scenarios.
     return all_ids
+
+
+def edge_case_scenario_ids() -> List[str]:
+    """Scenario ids for edge cases where an LLM should beat fixed rules."""
+    return [sid for sid in list_scenario_ids() if sid.startswith("edge_")]
 
