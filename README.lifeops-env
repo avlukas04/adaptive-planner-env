@@ -1,0 +1,17 @@
+---
+title: LifeOps OpenEnv
+emoji: 📅
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+startup_duration_timeout: 15m
+pinned: false
+---
+
+# LifeOps OpenEnv Environment
+
+OpenEnv 0.2.1 environment for LifeOps — AI schedule assistant (Statement 3.2: Personalized Tasks).
+
+- **Reset/Step API** for RL training
+- Connect from Colab: `LifeOpsEnv(base_url="https://YOUR_ORG-lifeops-env.hf.space")`

@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-
-from env.reward import detect_overlaps, travel_issues
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 class ActionType(str, Enum):
@@ -78,24 +76,12 @@ def generate_valid_actions(state: Dict[str, Any]) -> List[Action]:
             ]
         )
 
-        # Reschedule/propose options.
-        # We include a few more candidate start times so that, after masking,
-        # agents usually still have at least one feasible alternative.
+        # Minimal reschedule/propose: shift by +/- 30 minutes, same duration.
         start = int(current_req["start_min"])
         end = int(current_req["end_min"])
         duration = max(0, end - start)
-        candidate_starts: List[int] = []
-        for delta in (-120, -90, -60, -30, 30, 60, 90, 120):
-            candidate_starts.append(start + delta)
-        # Add a few anchor times within the typical workday.
-        candidate_starts.extend([9 * 60, 10 * 60, 11 * 60, 13 * 60, 14 * 60, 15 * 60, 16 * 60, 17 * 60])
-
-        seen = set()
-        for s in candidate_starts:
-            new_start = max(0, min(1440 - duration, int(s)))
-            if new_start in seen:
-                continue
-            seen.add(new_start)
+        for delta in (-30, 30, 60):
+            new_start = max(0, min(1440 - duration, start + delta))
             actions.append(
                 Action(
                     ActionType.reschedule_event,
@@ -117,8 +103,7 @@ def generate_valid_actions(state: Dict[str, Any]) -> List[Action]:
     tasks = state.get("tasks", [])
     has_unfinished = any(int(t.get("remaining_minutes", 0)) > 0 for t in tasks)
     if has_unfinished:
-        # Include late-evening productivity blocks (baseline agent uses these).
-        for start_min in (9 * 60, 11 * 60, 14 * 60, 16 * 60, 20 * 60, 21 * 60):
+        for start_min in (9 * 60, 11 * 60, 14 * 60, 16 * 60):
             for duration in (30, 60):
                 actions.append(
                     Action(
@@ -157,6 +142,7 @@ def mask_illegal_actions(
     - Focus blocks are allowed in blocked hours, but are still masked if they
       overlap existing events or create travel issues.
     """
+    from env.reward import detect_overlaps, travel_issues
 
     calendar = list(state.get("calendar", []))
     req = state.get("current_request") or None

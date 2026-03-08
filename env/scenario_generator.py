@@ -83,7 +83,6 @@ class Scenario:
     tasks: List[Task]
     incoming_requests: List[IncomingRequest]
     travel_times: Dict[str, Dict[str, int]]
-    # Optional metadata to enable "edge case" behavior.
     day_of_week: str = "Wednesday"  # Monday..Sunday
     tags: Optional[List[str]] = None
 
@@ -319,7 +318,12 @@ def sample_scenarios() -> List[Scenario]:
             persona_id="busy_parent",
             calendar=[
                 Event("e1", "School drop-off", h2m(8, 30), h2m(9, 0), "School", importance=3, kind="obligation"),
+                # Intentionally "messy": stacked focus blocks + little slack. This makes the incoming
+                # request conflict obvious in the demo UI.
                 Event("e2", "Work block", h2m(9, 30), h2m(11, 0), "Office", importance=2, kind="focus"),
+                Event("e4", "Pitch deck focus block", h2m(11, 0), h2m(12, 0), "Office", importance=3, kind="focus"),
+                Event("e5", "Email triage", h2m(12, 30), h2m(13, 0), "Office", importance=1, kind="personal"),
+                Event("e6", "Prep notes", h2m(13, 30), h2m(14, 0), "Office", importance=2, kind="focus"),
                 Event("e3", "School pickup", h2m(15, 30), h2m(16, 0), "School", importance=3, kind="obligation"),
             ],
             tasks=[
@@ -384,8 +388,6 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
-            day_of_week="Wednesday",
-            tags=["hard"],
         ),
         Scenario(
             scenario_id="s2_travel_tight",
@@ -408,8 +410,6 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
-            day_of_week="Tuesday",
-            tags=["hard"],
         ),
         Scenario(
             scenario_id="s3_focus_vs_meeting",
@@ -435,8 +435,6 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
-            day_of_week="Thursday",
-            tags=["hard"],
         ),
         Scenario(
             scenario_id="s4_parent_pickup",
@@ -460,8 +458,6 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
-            day_of_week="Friday",
-            tags=["hard"],
         ),
         Scenario(
             scenario_id="s5_late_meeting",
@@ -484,8 +480,6 @@ def sample_scenarios() -> List[Scenario]:
                 )
             ],
             travel_times=tt,
-            day_of_week="Monday",
-            tags=["hard"],
         ),
     ]
 
@@ -499,31 +493,4 @@ def get_scenario(scenario_id: str) -> Scenario:
 
 def list_scenario_ids() -> List[str]:
     return [s.scenario_id for s in sample_scenarios()]
-
-
-def scenario_ids_by_difficulty(difficulty: str) -> List[str]:
-    """
-    Curriculum helper.
-
-    Difficulty buckets:
-    - easy: 2-3 events, no travel conflicts, no goals
-    - medium: 4-5 events, 1 travel constraint, 1 goal
-    - hard: everything else (full constraints)
-    """
-
-    d = difficulty.strip().lower()
-    all_ids = list_scenario_ids()
-    if d == "easy":
-        return [sid for sid in all_ids if sid.startswith("easy_")]
-    if d == "medium":
-        return [sid for sid in all_ids if sid.startswith("medium_")]
-    if d == "hard":
-        return [sid for sid in all_ids if not (sid.startswith("easy_") or sid.startswith("medium_"))]
-    # Unknown difficulty => all scenarios.
-    return all_ids
-
-
-def edge_case_scenario_ids() -> List[str]:
-    """Scenario ids for edge cases where an LLM should beat fixed rules."""
-    return [sid for sid in list_scenario_ids() if sid.startswith("edge_")]
 

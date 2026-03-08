@@ -70,7 +70,6 @@ class LifeOpsState:
     tasks: List[Dict[str, Any]]
     pending_requests: List[Dict[str, Any]]
     travel_times: Dict[str, Dict[str, int]]
-    day_of_week: str
     step_count: int
     max_steps: int
 
@@ -92,13 +91,10 @@ class LifeOpsState:
 
         return {
             "scenario_id": self.scenario_id,
-            "day_of_week": self.day_of_week,
             "persona": copy.deepcopy(self.persona),
             "calendar": copy.deepcopy(self.calendar),
             "tasks": copy.deepcopy(self.tasks),
             "current_request": copy.deepcopy(self.current_request()),
-            # Preview the next couple of requests so agents can avoid cascading conflicts.
-            "upcoming_requests_preview": copy.deepcopy(self.pending_requests[1:3]),
             "pending_request_count": len(self.pending_requests),
             "travel_times": copy.deepcopy(self.travel_times),
             "step_count": self.step_count,
@@ -143,7 +139,6 @@ class LifeOpsEnv:
             tasks=tasks,
             pending_requests=pending,
             travel_times=copy.deepcopy(scenario.travel_times),
-            day_of_week=str(getattr(scenario, "day_of_week", "Wednesday")),
             step_count=0,
             max_steps=max_steps,
         )
@@ -190,7 +185,6 @@ class LifeOpsEnv:
 
         # Done condition: all requests handled + tasks complete, or step limit.
         done = self._is_done()
-        truncated = bool(self._state.step_count >= self._state.max_steps and (self._state.pending_requests or any(int(t.get("remaining_minutes", 0)) > 0 for t in self._state.tasks)))
 
         next_obs = self._state.to_observation()
 
@@ -199,7 +193,6 @@ class LifeOpsEnv:
         reward_state["last_added_event"] = copy.deepcopy(self._state.last_added_event)
         reward_state["last_handled_request"] = copy.deepcopy(self._state.last_handled_request)
         reward_state["last_task_progress_minutes"] = int(self._state.last_task_progress_minutes)
-        reward_state["_truncated"] = truncated
 
         reward, breakdown = compute_reward(prev_obs, action_dict, reward_state)
 
