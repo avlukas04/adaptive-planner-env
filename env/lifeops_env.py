@@ -119,6 +119,14 @@ class LifeOpsEnv:
         self._personas = get_personas()
         self._state: Optional[LifeOpsState] = None
 
+    def clone(self) -> "LifeOpsEnv":
+        """Create a copy of the env for simulation (e.g. Best-of-N rollouts)."""
+        cloned = LifeOpsEnv(seed=None)
+        cloned._personas = self._personas
+        if self._state is not None:
+            cloned._state = copy.deepcopy(self._state)
+        return cloned
+
     def reset(self, scenario_id: Optional[str] = None) -> Dict[str, Any]:
         if scenario_id is None:
             scenario_id = self._rng.choice(list_scenario_ids())

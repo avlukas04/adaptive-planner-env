@@ -152,6 +152,19 @@ def compute_reward(
             reward -= 0.5  # wasted focus block
             breakdown["wasted_focus_penalty"] = -0.5
 
+    # Bonus for accepting high-importance requests.
+    if action.get("action_type") == "accept_event" and next_state.get("last_handled_request"):
+        handled = next_state["last_handled_request"]
+        if int(handled.get("importance", 1)) >= 3:
+            reward += 2.0
+            breakdown["important_accept_bonus"] = 2.0
+
+    # Bonus when scheduling action results in zero overlaps and zero travel issues.
+    if action.get("action_type") in {"accept_event", "reschedule_event", "propose_new_time"}:
+        if not next_overlaps and not issues:
+            reward += 1.0
+            breakdown["clean_schedule_bonus"] = 1.0
+
     breakdown["total"] = reward
     return reward, breakdown
 
