@@ -132,6 +132,7 @@ def train(
     policy: str = "random",
     scenario_id: Optional[str] = None,
     verbose: bool = False,
+    env: Optional["LifeOpsEnv"] = None,
 ) -> Dict[str, Any]:
     """
     Run RL training loop: collect trajectories and print results.
@@ -142,11 +143,13 @@ def train(
         policy: "random" or "heuristic"
         scenario_id: fix scenario (None = random each episode)
         verbose: print per-step details
+        env: optional env instance (LifeOpsEnv or LifeOpsEnvAdapter for OpenEnv remote)
 
     Returns:
         Summary dict with episode rewards and stats
     """
-    env = LifeOpsEnv(seed=seed)
+    if env is None:
+        env = LifeOpsEnv(seed=seed)
 
     all_rewards: List[float] = []
     all_lengths: List[int] = []
