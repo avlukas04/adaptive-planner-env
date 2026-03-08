@@ -14,8 +14,8 @@ if str(_repo_root) not in sys.path:
 from env.actions import Action, ActionType, generate_valid_actions
 from env.lifeops_env import LifeOpsEnv
 
-from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import State
+from openenv_core.env_server.interfaces import Environment
+from openenv_core.env_server.types import State
 
 from ..models import LifeOpsAction, LifeOpsObservation
 
