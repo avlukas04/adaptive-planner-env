@@ -29,7 +29,7 @@ Requirements:
 """
 # Set your LifeOps OpenEnv Space URL (after deploying)
 # Format: https://ORG-SPACE-NAME.hf.space (replace / with -)
-LIFEOPS_ENV_URL = "https://openenv-community-lifeops-env.hf.space"
+LIFEOPS_ENV_URL = "https://avlukas-lifeops-openenv.hf.space"
 
 from openenv_lifeops.env_adapter import LifeOpsEnvAdapter
 from env.lifeops_env import _choose_simple_action

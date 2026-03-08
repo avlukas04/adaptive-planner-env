@@ -7,11 +7,18 @@ To meet the hackathon requirement: **OpenEnv (stable 0.2.1) deployed on HF Space
 - Hugging Face account with [token](https://huggingface.co/settings/tokens) (write access)
 - Git with `openenv-integration` branch pushed to origin
 
+## Important: Use a Fresh Space (Docker SDK)
+
+**If you had a previous Space** (e.g. Gradio, Streamlit, or an older Docker setup) and want to repush:
+
+- HF Spaces can cache SDK type and build state. Repushing Docker content into a Space created with a different SDK often causes "stuck on Starting" or 503 errors.
+- **Fix:** Create a **brand new Space** with **Docker** SDK selected from the start. Do not reuse an existing Space that had a different SDK.
+
 ## Step 1: Create the HF Space
 
 1. Go to [huggingface.co/new-space](https://huggingface.co/new-space)
 2. **Space name:** `lifeops-env` (or `YOUR_ORG-lifeops-env`)
-3. **SDK:** Select **Docker**
+3. **SDK:** Select **Docker** (critical – do not use Gradio/Streamlit)
 4. **Visibility:** Public
 5. Click **Create Space**
 
@@ -76,6 +83,7 @@ Then run Cell 3a to connect to the remote env.
 
 ## Troubleshooting
 
+- **Stuck on "Starting" / 503:** Usually caused by repushing to a Space created with a different SDK. Create a **new Space** with Docker SDK and deploy there.
 - **Build fails:** Check Logs for errors. Ensure `env/` and `openenv_lifeops/` are in the repo.
-- **Connection refused:** Wait for the build to finish. HF Spaces can take a few minutes to start.
+- **Connection refused:** Wait for the build to finish. HF Spaces can take 5–15 minutes to start.
 - **Port issues:** The Dockerfile uses port 7860 (HF default). `README.lifeops-env` sets `app_port: 7860`.

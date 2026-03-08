@@ -21,6 +21,12 @@ app = create_app(
 print("[LifeOps] App created, ready for uvicorn", flush=True)
 
 
+@app.get("/health")
+def health():
+    """HF Spaces / Docker HEALTHCHECK endpoint."""
+    return {"status": "ok"}
+
+
 def main():
     import os
     import uvicorn
