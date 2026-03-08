@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 class ActionType(str, Enum):
@@ -115,4 +115,106 @@ def generate_valid_actions(state: Dict[str, Any]) -> List[Action]:
                 )
 
     return actions
+
+
+def mask_illegal_actions(
+    state: Dict[str, Any],
+    actions: Sequence[Action],
+    *,
+    blocked_meeting_hours: Sequence[Tuple[int, int]] = ((0, 9 * 60), (20 * 60, 23 * 60)),
+) -> List[Action]:
+    """
+    Filter out actions that would be illegal or obviously infeasible.
+
+    This is a *policy-side* action mask applied before any agent samples.
+    It reduces variance and avoids repeatedly taking actions that guarantee
+    negative reward (double-booking, impossible travel, or scheduling meetings
+    inside blocked hours).
+
+    Mask rules:
+    - **Double booking**: scheduled event overlaps an existing calendar event.
+    - **Travel violations**: scheduled event makes consecutive travel impossible.
+    - **Blocked hours**: meeting-like requests cannot be scheduled in blocked hours.
+
+    Notes:
+    - `propose_new_time` does not schedule in env semantics, but proposing a
+      blocked-hour time is still treated as illegal to avoid bad suggestions.
+    - Focus blocks are allowed in blocked hours, but are still masked if they
+      overlap existing events or create travel issues.
+    """
+    from env.reward import detect_overlaps, travel_issues
+
+    calendar = list(state.get("calendar", []))
+    req = state.get("current_request") or None
+    persona = state.get("persona", {}) or {}
+    travel_times = state.get("travel_times", {}) or {}
+
+    def overlaps_blocked(start_min: int, end_min: int) -> bool:
+        for bs, be in blocked_meeting_hours:
+            if start_min < be and bs < end_min:
+                return True
+        return False
+
+    masked: List[Action] = []
+    for a in actions:
+        at = a.action_type.value
+        if at == ActionType.reject_event.value:
+            masked.append(a)
+            continue
+
+        if at == ActionType.block_focus_time.value:
+            start = int(a.new_start_min or 0)
+            dur = int(a.duration_min or 0)
+            end = start + dur
+            focus_event = {
+                "event_id": "__focus__",
+                "start_min": start,
+                "end_min": end,
+                "location": persona.get("primary_work_location", "Home"),
+                "kind": "focus",
+                "importance": 1,
+            }
+            sim = calendar + [focus_event]
+            if detect_overlaps(sim):
+                continue
+            if travel_issues(sim, travel_times, start_location=persona.get("home_location")):
+                continue
+            masked.append(a)
+            continue
+
+        # Request-handling actions require a request.
+        if req is None:
+            continue
+
+        # Determine scheduled/suggested time.
+        if at in {ActionType.accept_event.value}:
+            start = int(req.get("start_min", 0))
+            end = int(req.get("end_min", 0))
+        elif at in {ActionType.reschedule_event.value, ActionType.propose_new_time.value}:
+            start = int(a.new_start_min or req.get("start_min", 0))
+            end = int(a.new_end_min or req.get("end_min", 0))
+        else:
+            # Unknown action type; drop.
+            continue
+
+        # Meetings should not be scheduled (or proposed) during blocked hours.
+        kind = str(req.get("kind", "meeting"))
+        if kind in {"meeting", "obligation", "personal"} and overlaps_blocked(start, end):
+            continue
+
+        candidate = dict(req)
+        candidate["start_min"] = start
+        candidate["end_min"] = end
+
+        # For proposals, check feasibility as if it were scheduled.
+        sim = calendar + [candidate]
+        if detect_overlaps(sim):
+            continue
+        if travel_issues(sim, travel_times, start_location=persona.get("home_location")):
+            continue
+
+        masked.append(a)
+
+    # Always return something if possible; if we masked everything, fall back to original.
+    return masked if masked else list(actions)
 
