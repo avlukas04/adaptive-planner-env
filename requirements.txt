@@ -1,0 +1,7 @@
+streamlit
+matplotlib
+groq
+
+# Optional local fallback (only needed if you set LIFEOPS_LOCAL_MODEL)
+transformers
+torch
